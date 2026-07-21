@@ -5,7 +5,7 @@ All notable changes to MCP Switchboard are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [1.1.0] — 2026-07-21
 
 ### Added
 
@@ -85,5 +85,6 @@ Initial release.
 - **Built-in `switchboard__list_servers` meta-tool.**
 - Docker image and GitHub Actions CI (build + test, plus a Docker build and smoke test).
 
+[1.1.0]: https://github.com/cmer/mcp-switchboard/compare/v1.0.1...v1.1.0
 [1.0.1]: https://github.com/cmer/mcp-switchboard/compare/v1.0.0...v1.0.1
 [1.0.0]: https://github.com/cmer/mcp-switchboard/releases/tag/v1.0.0

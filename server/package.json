@@ -1,6 +1,6 @@
 {
   "name": "@cmer/mcp-switchboard",
-  "version": "1.0.1",
+  "version": "1.1.0",
   "type": "module",
   "description": "Self-hosted MCP switchboard: configure MCP servers once, give each coding agent its own endpoint and its own set of tools.",
   "keywords": [
