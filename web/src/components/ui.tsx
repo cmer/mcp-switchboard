@@ -228,13 +228,42 @@ export function Tabs<T extends string>({
 
 /* ---------- Code block with copy ---------- */
 
+/** navigator.clipboard only exists in secure contexts (https / localhost); fall back for plain http. */
+async function copyText(text: string): Promise<boolean> {
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(text);
+      return true;
+    }
+  } catch {
+    /* fall through to the legacy path */
+  }
+  try {
+    const ta = document.createElement("textarea");
+    ta.value = text;
+    ta.setAttribute("readonly", "");
+    ta.style.position = "fixed";
+    ta.style.opacity = "0";
+    document.body.appendChild(ta);
+    ta.select();
+    ta.setSelectionRange(0, ta.value.length);
+    const ok = document.execCommand("copy");
+    document.body.removeChild(ta);
+    return ok;
+  } catch {
+    return false;
+  }
+}
+
 export function CopyButton({ text, label = "Copy" }: { text: string; label?: string }) {
   return (
     <Button
       size="sm"
       onClick={() => {
-        void navigator.clipboard.writeText(text);
-        toast.success("Copied");
+        void copyText(text).then((ok) => {
+          if (ok) toast.success("Copied");
+          else toast.error("Copy failed — select the text and copy manually");
+        });
       }}
     >
       {label}
