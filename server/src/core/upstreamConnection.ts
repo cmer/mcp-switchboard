@@ -208,8 +208,8 @@ export class UpstreamConnection {
       this.events.onCachesChanged(this.serverId, "tools");
     } catch (err) {
       let msg = err instanceof Error ? err.message : String(err);
-      if (/\b401\b/.test(msg) && this.row.authType !== "oauth") {
-        msg += " — this server may require OAuth; edit it and set Authentication to OAuth";
+      if (/\b401\b|invalid_token|unauthorized/i.test(msg) && this.row.authType !== "oauth") {
+        msg += "\n→ This server likely requires OAuth. Edit it, set Authentication to OAuth, then click Authorize.";
       }
       this.lastError = msg;
       await this.teardown();

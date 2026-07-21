@@ -4,7 +4,8 @@ import { and, eq } from "drizzle-orm";
 import { auth } from "@modelcontextprotocol/sdk/client/auth.js";
 import { agentServers, oauthCredentials, servers, type ServerRow } from "../../db/schema.js";
 import { decrypt, encrypt } from "../../lib/crypto.js";
-import { parseImport } from "../../lib/importParser.js";
+import { probeAuth, type ProbeResult } from "../../lib/authProbe.js";
+import { parseImport, type ParsedServer } from "../../lib/importParser.js";
 import { isReservedSlug, isValidSlug, slugify } from "../../lib/slug.js";
 import { nsName } from "../../core/namespace.js";
 import type { AppContext } from "../context.js";
@@ -127,6 +128,18 @@ function insertServer(ctx: AppContext, input: CreateInput): { row: ServerRow } |
 
 const importSchema = z.object({ text: z.string().min(1), dryRun: z.boolean().optional().default(false) });
 
+/**
+ * Probe remote no-auth entries in parallel to detect servers that actually
+ * require OAuth (or some token) before we save a config that would just 401.
+ */
+async function detectAuth(parsed: ParsedServer[]): Promise<(ProbeResult | null)[]> {
+  return Promise.all(
+    parsed.map((p) =>
+      p.type !== "stdio" && p.authType === "none" && p.url ? probeAuth(p.url) : Promise.resolve(null),
+    ),
+  );
+}
+
 export function serverRoutes(ctx: AppContext): Hono {
   const app = new Hono();
 
@@ -155,9 +168,16 @@ export function serverRoutes(ctx: AppContext): Hono {
       return c.json({ error: err instanceof Error ? err.message : "Could not parse input" }, 400);
     }
 
+    const detected = await detectAuth(parsed);
+    // A detected OAuth server is imported as OAuth so it lands on "Needs auth"
+    // with a one-click Authorize instead of failing with a 401.
+    for (let i = 0; i < parsed.length; i++) {
+      if (detected[i] === "oauth") parsed[i].authType = "oauth";
+    }
+
     if (body.data.dryRun) {
       return c.json({
-        servers: parsed.map((p) => ({
+        servers: parsed.map((p, i) => ({
           name: p.name,
           slug: p.slug,
           type: p.type,
@@ -165,6 +185,7 @@ export function serverRoutes(ctx: AppContext): Hono {
           args: p.args ?? [],
           url: p.url ?? null,
           authType: p.authType,
+          detectedAuth: detected[i] === "oauth" || detected[i] === "auth_required" ? detected[i] : null,
           envKeys: p.env ? Object.keys(p.env) : [],
           slugTaken: !!ctx.db.select().from(servers).where(eq(servers.slug, p.slug)).get(),
         })),

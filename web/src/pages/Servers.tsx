@@ -7,7 +7,7 @@ import { useApiMutation, useServerLogs, useServers, useServerTools } from "@/lib
 import type { ServerInfo } from "@/lib/types";
 import { PageBar } from "@/components/Layout";
 import { StatusDot, statusInfo } from "@/components/StatusDot";
-import { Badge, Button, Dialog, Field, Input, Select, Switch, Tabs, Textarea } from "@/components/ui";
+import { Badge, Button, CopyButton, Dialog, Field, Input, Select, Switch, Tabs, Textarea } from "@/components/ui";
 
 /* ---------- add / edit dialog ---------- */
 
@@ -19,6 +19,7 @@ interface ImportPreviewEntry {
   args: string[];
   url: string | null;
   authType: string;
+  detectedAuth: "oauth" | "auth_required" | null;
   envKeys: string[];
   slugTaken: boolean;
 }
@@ -136,6 +137,12 @@ function ServerDialog({
         toast.success(`Added ${res.created.length} server${res.created.length === 1 ? "" : "s"}`);
       }
       for (const e of res.errors) toast.error(`${e.name}: ${e.error}`);
+      const oauthCreated = res.created.filter((s) => s.authType === "oauth");
+      if (oauthCreated.length === 1) {
+        void startOAuth(oauthCreated[0].id); // straight to the consent page
+      } else if (oauthCreated.length > 1) {
+        toast.info("Several servers need OAuth — click Authorize on each row to finish setup");
+      }
     },
   );
 
@@ -225,6 +232,12 @@ function ServerDialog({
                     </span>
                   </span>
                   <Badge>{p.type === "stdio" ? "Local · stdio" : `Remote · ${p.authType === "none" ? p.type.toUpperCase() : p.authType}`}</Badge>
+                  {p.detectedAuth === "oauth" && (
+                    <Badge className="border-transparent bg-primary-soft font-semibold text-primary">OAuth detected</Badge>
+                  )}
+                  {p.detectedAuth === "auth_required" && (
+                    <Badge className="border-transparent bg-warn-bg font-semibold text-warn">needs a token</Badge>
+                  )}
                   {p.slugTaken && <Badge className="border-transparent bg-warn-bg font-semibold text-warn">slug taken</Badge>}
                 </div>
               ))}
@@ -378,6 +391,14 @@ function ServerDetails({ server, onEdit }: { server: ServerInfo; onEdit: () => v
 
   return (
     <div className="border-t border-border-soft bg-panel-2/40 px-4 py-3">
+      {server.lastError && server.state !== "connected" && (
+        <div className="mb-3 flex items-start gap-2 rounded-lg bg-err-bg px-3 py-2">
+          <p className="min-w-0 flex-1 font-mono text-[11.5px] leading-relaxed break-words whitespace-pre-wrap text-err">
+            {server.lastError}
+          </p>
+          <CopyButton text={server.lastError} />
+        </div>
+      )}
       <div className="mb-3 flex items-center justify-between gap-3">
         <div className="w-56">
           <Tabs
@@ -463,7 +484,7 @@ function ServerRow({ server, onEdit }: { server: ServerInfo; onEdit: () => void 
             <span className="font-mono text-[13px] font-semibold">{server.slug}</span>
             {expanded ? <ChevronUp size={13} className="text-faint" /> : <ChevronDown size={13} className="text-faint" />}
           </div>
-          <div className="truncate text-xs text-faint">
+          <div className="truncate text-xs text-faint" title={server.lastError ?? undefined}>
             <span
               className={
                 status.tone === "ok"
