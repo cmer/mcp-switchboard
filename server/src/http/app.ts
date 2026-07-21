@@ -8,7 +8,7 @@ import { adminAuthMiddleware } from "./adminAuth.js";
 import type { AppContext } from "./context.js";
 import { mcpEndpointHandler } from "./mcpEndpoint.js";
 import { agentRoutes } from "./routes/agents.js";
-import { authRoutes } from "./routes/auth.js";
+import { authRoutes, isAuthDisabled } from "./routes/auth.js";
 import { serverRoutes } from "./routes/servers.js";
 
 const MIME: Record<string, string> = {
@@ -56,7 +56,7 @@ export function createApp(ctx: AppContext, webDist: string): Hono {
   // --- Admin REST API ---
   const api = new Hono();
   api.route("/auth", authRoutes(ctx));
-  api.use("*", adminAuthMiddleware(ctx.adminSessions));
+  api.use("*", adminAuthMiddleware(ctx.adminSessions, () => isAuthDisabled(ctx)));
   api.route("/servers", serverRoutes(ctx));
   api.route("/agents", agentRoutes(ctx));
   api.get("/status", (c) =>

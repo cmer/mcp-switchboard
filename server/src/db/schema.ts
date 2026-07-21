@@ -27,6 +27,11 @@ export const servers = sqliteTable("servers", {
   updatedAt: integer("updated_at").notNull(),
 });
 
+export const adminSessions = sqliteTable("admin_sessions", {
+  id: text("id").primaryKey(),
+  createdAt: integer("created_at").notNull(),
+});
+
 export const agents = sqliteTable("agents", {
   id: integer("id").primaryKey({ autoIncrement: true }),
   slug: text("slug").notNull().unique(),

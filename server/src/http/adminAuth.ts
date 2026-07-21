@@ -1,32 +1,51 @@
 import crypto from "node:crypto";
 import type { Context, Next } from "hono";
 import { getCookie, setCookie, deleteCookie } from "hono/cookie";
+import { eq, lt } from "drizzle-orm";
+import type { Db } from "../db/index.js";
+import { adminSessions } from "../db/schema.js";
 
-const COOKIE = "gw_session";
-const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+const COOKIE = "sb_session";
+const SESSION_TTL_MS = 365 * 24 * 60 * 60 * 1000;
 
+/**
+ * Admin sessions persisted in SQLite so "remember me" survives restarts —
+ * the cookie and the row both live for 365 days.
+ */
 export class AdminSessionStore {
-  private sessions = new Map<string, number>(); // id → createdAt
+  constructor(private db: Db) {
+    this.prune();
+  }
+
+  private prune(): void {
+    this.db.delete(adminSessions).where(lt(adminSessions.createdAt, Date.now() - SESSION_TTL_MS)).run();
+  }
 
   create(): string {
     const id = crypto.randomBytes(32).toString("base64url");
-    this.sessions.set(id, Date.now());
+    this.db.insert(adminSessions).values({ id, createdAt: Date.now() }).run();
+    this.prune();
     return id;
   }
 
   has(id: string | undefined): boolean {
     if (!id) return false;
-    const createdAt = this.sessions.get(id);
-    if (createdAt == null) return false;
-    if (Date.now() - createdAt > SESSION_TTL_MS) {
-      this.sessions.delete(id);
+    const row = this.db.select().from(adminSessions).where(eq(adminSessions.id, id)).get();
+    if (!row) return false;
+    if (Date.now() - row.createdAt > SESSION_TTL_MS) {
+      this.delete(id);
       return false;
     }
     return true;
   }
 
   delete(id: string | undefined): void {
-    if (id) this.sessions.delete(id);
+    if (id) this.db.delete(adminSessions).where(eq(adminSessions.id, id)).run();
+  }
+
+  /** Invalidate every session (e.g. after a password change from a logged-out state). */
+  deleteAll(): void {
+    this.db.delete(adminSessions).run();
   }
 }
 
@@ -49,9 +68,9 @@ export function getSessionId(c: Context): string | undefined {
   return getCookie(c, COOKIE);
 }
 
-export function adminAuthMiddleware(store: AdminSessionStore) {
+export function adminAuthMiddleware(store: AdminSessionStore, isAuthDisabled: () => boolean) {
   return async (c: Context, next: Next) => {
-    if (!store.has(getSessionId(c))) {
+    if (!isAuthDisabled() && !store.has(getSessionId(c))) {
       return c.json({ error: "Unauthorized" }, 401);
     }
     await next();

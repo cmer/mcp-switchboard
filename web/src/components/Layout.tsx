@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 import { NavLink } from "react-router";
 import { Bot, Server, Settings } from "lucide-react";
+import { useAuthMe } from "@/lib/hooks";
 import { cn } from "@/lib/utils";
 
 function BrandMark() {
@@ -28,14 +29,16 @@ const NAV = [
 ];
 
 export function Layout({ children }: { children: ReactNode }) {
+  const { data: auth } = useAuthMe();
+  const instanceName = auth?.instanceName ?? null;
   return (
     <div className="flex min-h-screen">
       <aside className="hidden w-52 shrink-0 flex-col border-r border-border-soft bg-panel px-3 py-4 sm:flex">
         <div className="flex items-center gap-2.5 px-2 pb-4">
           <BrandMark />
-          <div>
+          <div className="min-w-0">
             <div className="text-[13.5px] font-semibold tracking-tight">MCP Switchboard</div>
-            <div className="text-[10.5px] text-faint">homelab</div>
+            {instanceName && <div className="truncate text-[10.5px] text-faint">{instanceName}</div>}
           </div>
         </div>
         <nav className="flex flex-col gap-0.5">

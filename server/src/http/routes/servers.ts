@@ -2,12 +2,13 @@ import { Hono } from "hono";
 import { z } from "zod";
 import { and, eq } from "drizzle-orm";
 import { auth } from "@modelcontextprotocol/sdk/client/auth.js";
-import { agentServers, oauthCredentials, servers, type ServerRow } from "../../db/schema.js";
+import { agentServers, agents, oauthCredentials, servers, type ServerRow } from "../../db/schema.js";
 import { decrypt, encrypt } from "../../lib/crypto.js";
 import { probeAuth, type ProbeResult } from "../../lib/authProbe.js";
 import { parseImport, type ParsedServer } from "../../lib/importParser.js";
 import { isReservedSlug, isValidSlug, slugify } from "../../lib/slug.js";
 import { nsName } from "../../core/namespace.js";
+import { getSetting } from "./auth.js";
 import type { AppContext } from "../context.js";
 
 const createSchema = z.object({
@@ -122,6 +123,13 @@ function insertServer(ctx: AppContext, input: CreateInput): { row: ServerRow } |
 
   if (row.authType === "oauth") {
     ctx.db.insert(oauthCredentials).values({ serverId: row.id, status: "needs_auth", updatedAt: now }).run();
+  }
+
+  // Optional convenience (Settings → General): new servers start enabled for every agent.
+  if (getSetting(ctx, "autoEnableNewServers") === "1") {
+    for (const agent of ctx.db.select({ id: agents.id }).from(agents).all()) {
+      ctx.db.insert(agentServers).values({ agentId: agent.id, serverId: row.id, enabled: true }).run();
+    }
   }
   return { row };
 }

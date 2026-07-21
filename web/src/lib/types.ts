@@ -39,6 +39,9 @@ export interface AgentInfo {
 export interface AuthMe {
   needsSetup: boolean;
   authenticated: boolean;
+  authDisabled: boolean;
+  instanceName: string | null;
+  autoEnableNewServers: boolean;
 }
 
 export interface ServerToolsInfo {

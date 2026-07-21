@@ -51,7 +51,7 @@ async function main(): Promise<void> {
     manager,
     hub,
     refresher,
-    adminSessions: new AdminSessionStore(),
+    adminSessions: new AdminSessionStore(db),
     makeOAuthProvider,
     version: VERSION,
   };
