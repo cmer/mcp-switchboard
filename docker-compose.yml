@@ -1,0 +1,13 @@
+services:
+  switchboard:
+    build: .
+    container_name: mcp-switchboard
+    restart: unless-stopped
+    ports:
+      - "8787:8787"
+    environment:
+      # Set to the URL agents/browsers reach the switchboard at (used for OAuth redirects)
+      - PUBLIC_URL=${PUBLIC_URL:-http://localhost:8787}
+    volumes:
+      # SQLite db + encryption key — back this up
+      - ./data:/app/data
