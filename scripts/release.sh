@@ -1,11 +1,24 @@
 #!/usr/bin/env bash
 # Release: bump versions, publish to npm, tag and push to GitHub, create the GitHub release.
-# Usage: scripts/release.sh <X.Y.Z> [--dry-run]
+# Usage: scripts/release.sh <X.Y.Z> [--otp <code>] [--dry-run]
+#
+# --otp is required if the npm account has 2FA enabled; codes expire in ~30s, so pass it at the
+# moment you run this rather than up front.
 set -euo pipefail
 
-VERSION="${1:?usage: scripts/release.sh <X.Y.Z> [--dry-run]}"
+USAGE="usage: scripts/release.sh <X.Y.Z> [--otp <code>] [--dry-run]"
+VERSION="${1:?$USAGE}"
+shift
 DRY_RUN=""
-[[ "${2:-}" == "--dry-run" ]] && DRY_RUN=1
+OTP=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --dry-run) DRY_RUN=1; shift ;;
+    --otp) OTP="${2:?error: --otp needs a code}"; shift 2 ;;
+    --otp=*) OTP="${1#*=}"; shift ;;
+    *) echo "error: unknown argument '$1'"; echo "$USAGE"; exit 1 ;;
+  esac
+done
 [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "error: version must be X.Y.Z, got '$VERSION'"; exit 1; }
 
 cd "$(dirname "$0")/.."
@@ -47,7 +60,13 @@ git tag -a "v$VERSION" -m "v$VERSION"
 
 # npm first: if it fails, nothing has been pushed yet and the commit/tag can be dropped locally.
 echo "==> Publishing @cmer/mcp-switchboard@$VERSION to npm"
-npm publish -w server
+if ! npm publish -w server ${OTP:+--otp "$OTP"}; then
+  echo
+  echo "error: npm publish failed. Nothing has been pushed; to unwind the local release commit:"
+  echo "    git reset --hard origin/main && git tag -d v$VERSION"
+  [[ -z "$OTP" ]] && echo "If the account has 2FA, re-run with: scripts/release.sh $VERSION --otp <code>"
+  exit 1
+fi
 
 echo "==> Pushing main + tag"
 git push origin main "v$VERSION"
