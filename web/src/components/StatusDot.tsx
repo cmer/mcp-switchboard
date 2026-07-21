@@ -3,8 +3,10 @@ import type { ServerInfo } from "@/lib/types";
 
 export function statusInfo(server: ServerInfo): { tone: "ok" | "warn" | "err" | "off"; text: string } {
   if (!server.enabled) return { tone: "off", text: "Off" };
+  // "pending" only means an authorize flow was started at some point — until
+  // tokens exist the actionable truth is the same: it needs authorization.
   if (server.authType === "oauth" && server.oauthStatus !== "ok") {
-    return { tone: "warn", text: server.oauthStatus === "pending" ? "Authorizing…" : "Needs auth" };
+    return { tone: "warn", text: "Needs auth" };
   }
   switch (server.state) {
     case "connected":

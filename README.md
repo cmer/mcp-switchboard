@@ -4,17 +4,24 @@ A small self-hosted switchboard for MCP: put all your MCP servers in one place a
 
 ![Servers — every state at a glance](docs/servers.png)
 
+- **One-click templates** — add 20+ popular servers (GitHub, Linear, Jira & Confluence, Notion, Stripe, Shopify, Vercel, Netlify, Cloudflare, Supabase, AWS, Zapier, Gmail, Google Drive/Calendar/Sheets, Context7, shadcn/ui, Playwright, Chrome DevTools, Firecrawl, Exa, Brave Search) from a visual picker; OAuth servers go straight to the browser consent page, the rest ask only for the API key they need.
 - **Local servers** — stdio processes (`npx …`, `uvx …`) spawned and supervised by the switchboard, with restart-on-crash and stderr logs.
 - **Remote servers** — Streamable HTTP or SSE, with bearer-token, custom-header, or full OAuth 2.1 auth. OAuth tokens are stored encrypted and refreshed proactively in the background so auth never goes stale.
 - **Per-agent switch matrix** — enable/disable each server per agent; changes apply live via `tools/list_changed`, no agent restart.
-- **Paste to import** — paste a `claude mcp add …` command or an `mcpServers` JSON block into Add server → Paste; the switchboard parses it (multiple entries supported) and shows a preview before creating.
+- **Paste to import** — paste a `claude mcp add …` command or an `mcpServers` JSON block into Add server → Paste config; the switchboard parses it (multiple entries supported) and shows a preview before creating.
 - **Namespaced tools** — `github__create_issue`, `google-work__gmail_search`. Multiple accounts of the same service are just multiple server entries with different slugs.
 - **Agents know which account is which** — give each server a description ("Work Gmail — carl@company.com") and the switchboard weaves it into every tool description, the server instructions roster, and a built-in `switchboard__list_servers` tool agents can call to see slug, purpose, status, and tool count.
 - **Homelab-simple auth** — one admin password for the UI, one bearer token per agent. Designed for a trusted LAN, not the public internet.
 
-| Per-agent switch matrix | Paste to import |
+| Add from a template | Paste to import (auth auto-detected) |
 | --- | --- |
-| ![Agents — per-agent server switches, endpoint and token](docs/agents.png) | ![Add server — paste a claude mcp add command and preview](docs/paste-import.png) |
+| ![Add server — pick a service from the template gallery](docs/add-server.png) | ![Add server — paste a claude mcp add command; OAuth is detected automatically](docs/paste-import.png) |
+
+![Agents — per-agent server switches, endpoint and token](docs/agents.png)
+
+| Tools & logs per server | One-click agent onboarding |
+| --- | --- |
+| ![Server row expanded — namespaced tools and stderr logs](docs/server-detail.png) | ![Connect dialog — ready-to-paste snippets for Claude Code, Codex, or raw JSON](docs/connect.png) |
 
 ## Quick start
 
@@ -49,6 +56,10 @@ claude mcp add switchboard --transport http \
 ```
 
 ## Configuration
+
+Settings → General/Security covers the instance name, auto-enabling new servers for every agent, changing the admin password, and — for fully trusted networks — turning web-UI auth off entirely:
+
+![Settings — instance name, auto-enable, auth toggle, change password](docs/settings.png)
 
 | Env var | Default | Purpose |
 | --- | --- | --- |

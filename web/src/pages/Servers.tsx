@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "react-router";
-import { ChevronDown, ChevronUp, Plus } from "lucide-react";
+import { ArrowLeft, ChevronDown, ChevronUp, Plus } from "lucide-react";
 import { toast } from "sonner";
 import { api } from "@/lib/api";
 import { useApiMutation, useServerLogs, useServers, useServerTools } from "@/lib/hooks";
+import { SERVER_TEMPLATES, templatePayload, templateReady, type ServerTemplate } from "@/lib/templates";
 import type { ServerInfo } from "@/lib/types";
 import { PageBar } from "@/components/Layout";
 import { StatusDot, statusInfo } from "@/components/StatusDot";
@@ -72,11 +73,17 @@ function ServerDialog({
   open,
   onClose,
   editing,
+  takenSlugs,
 }: {
   open: boolean;
   onClose: () => void;
   editing: ServerInfo | null;
+  takenSlugs: Set<string>;
 }) {
+  const [view, setView] = useState<"picker" | "template" | "manual">("picker");
+  const [template, setTemplate] = useState<ServerTemplate | null>(null);
+  const [tSlug, setTSlug] = useState("");
+  const [tValues, setTValues] = useState<Record<string, string>>({});
   const [form, setForm] = useState<FormState>(EMPTY);
   const [pasteText, setPasteText] = useState("");
   const [preview, setPreview] = useState<{ servers: ImportPreviewEntry[]; error: string | null }>({
@@ -100,10 +107,13 @@ function ServerDialog({
   useEffect(() => {
     if (!open) return;
     if (!editing) {
+      setView("picker");
+      setTemplate(null);
       setForm(EMPTY);
       setPasteText("");
       return;
     }
+    setView("manual");
     setForm({
       name: editing.name,
       slug: editing.slug,
@@ -122,6 +132,35 @@ function ServerDialog({
   }, [open, editing]);
 
   const set = (patch: Partial<FormState>) => setForm((f) => ({ ...f, ...patch }));
+
+  const selectTemplate = (t: ServerTemplate) => {
+    // second account of the same service → auto-suffix the slug
+    let slug = t.slug;
+    for (let n = 2; takenSlugs.has(slug); n++) slug = `${t.slug}-${n}`;
+    setTemplate(t);
+    setTSlug(slug);
+    setTValues(Object.fromEntries((t.inputs ?? []).map((i) => [i.key, i.defaultValue ?? ""])));
+    setView("template");
+  };
+
+  const openManual = (kind: FormState["kind"]) => {
+    setForm({ ...EMPTY, kind });
+    setView("manual");
+  };
+
+  const saveTemplate = useApiMutation(
+    () =>
+      api<ServerInfo>("/api/servers", {
+        method: "POST",
+        json: templatePayload(template!, tSlug, tValues),
+      }),
+    ["servers", "agents"],
+    (created) => {
+      onClose();
+      if (created.authType === "oauth") void startOAuth(created.id);
+      else toast.success(`${created.name} added`);
+    },
+  );
 
   const doImport = useApiMutation(
     () =>
@@ -187,16 +226,93 @@ function ServerDialog({
     <Dialog
       open={open}
       onClose={onClose}
-      title={editing ? `Edit ${editing.name}` : "Add server"}
+      title={editing ? `Edit ${editing.name}` : view === "template" ? `Add ${template?.name}` : "Add server"}
       description={
-        form.kind === "stdio"
-          ? "Runs on this machine, supervised by the switchboard."
-          : form.kind === "remote"
-            ? "Hosted elsewhere; the switchboard connects out."
-            : "Paste a claude mcp add command or an mcpServers JSON block."
+        view === "picker"
+          ? "Pick a service, or set one up manually."
+          : view === "template"
+            ? template?.tagline
+            : form.kind === "stdio"
+              ? "Runs on this machine, supervised by the switchboard."
+              : form.kind === "remote"
+                ? "Hosted elsewhere; the switchboard connects out."
+                : "Paste a claude mcp add command or an mcpServers JSON block."
       }
       wide
     >
+      {view === "picker" ? (
+        <>
+          <div className="grid grid-cols-4 gap-2">
+            {SERVER_TEMPLATES.map((t) => (
+              <button
+                key={t.slug}
+                onClick={() => selectTemplate(t)}
+                className="group flex cursor-pointer flex-col items-center gap-2 rounded-xl border border-border-soft bg-panel px-1 py-3 transition-colors hover:border-primary hover:bg-panel-2 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
+              >
+                <span className="flex size-11 items-center justify-center rounded-[12px] border border-border-soft bg-white shadow-sm">
+                  {t.logo}
+                </span>
+                <span className="text-center text-xs leading-tight font-semibold tracking-tight">{t.name}</span>
+              </button>
+            ))}
+          </div>
+          <div className="mt-4 flex items-center gap-2 border-t border-border-soft pt-4">
+            <span className="mr-1 text-xs text-faint">Something else:</span>
+            <Button size="sm" onClick={() => openManual("stdio")}>
+              Local command
+            </Button>
+            <Button size="sm" onClick={() => openManual("remote")}>
+              Remote URL
+            </Button>
+            <Button size="sm" onClick={() => openManual("paste")}>
+              Paste config
+            </Button>
+          </div>
+        </>
+      ) : view === "template" && template ? (
+        <div className="flex flex-col gap-3">
+          <div className="flex items-center gap-3 rounded-[10px] border border-border-soft bg-panel-2/40 px-3 py-2.5">
+            <span className="flex size-10 shrink-0 items-center justify-center rounded-[10px] border border-border-soft bg-white shadow-sm">
+              {template.logo}
+            </span>
+            <span className="min-w-0 flex-1">
+              <span className="block truncate font-mono text-xs text-faint">
+                {template.transport === "stdio" ? [template.command, ...(template.args ?? [])].join(" ") : template.url}
+              </span>
+            </span>
+            <Badge>
+              {template.transport === "stdio"
+                ? "Local · stdio"
+                : `Remote · ${template.authType === "oauth" ? "OAuth" : template.transport === "sse" ? "SSE" : "HTTP"}`}
+            </Badge>
+          </div>
+          {(template.inputs ?? []).map((inp) => (
+            <Field key={inp.key} label={inp.label} hint={inp.hint ?? (inp.secret ? "encrypted at rest" : undefined)}>
+              <Input
+                type={inp.secret ? "password" : "text"}
+                autoFocus={!!inp.required}
+                value={tValues[inp.key] ?? ""}
+                onChange={(e) => setTValues((v) => ({ ...v, [inp.key]: e.target.value }))}
+              />
+            </Field>
+          ))}
+          <div className="grid grid-cols-2 gap-3">
+            <Field label="Slug" hint="prefixes tool names">
+              <Input value={tSlug} onChange={(e) => setTSlug(e.target.value)} />
+            </Field>
+          </div>
+          {template.note && (
+            <p className="rounded-[10px] bg-panel-2 px-3 py-2 text-xs leading-relaxed text-muted-fg">{template.note}</p>
+          )}
+          {template.authType === "oauth" && (
+            <p className="rounded-[10px] bg-primary-soft px-3 py-2 text-xs leading-relaxed text-muted-fg">
+              <b className="font-semibold text-foreground">You'll authorize in your browser after saving.</b> Tokens are stored
+              encrypted and refreshed automatically in the background.
+            </p>
+          )}
+        </div>
+      ) : (
+      <>
       <div className="mb-4">
         <Tabs
           value={form.kind}
@@ -331,28 +447,46 @@ function ServerDialog({
         )}
       </div>
       )}
-      <div className="mt-5 flex justify-end gap-2 border-t border-border-soft pt-4">
-        <Button variant="ghost" onClick={onClose}>
-          Cancel
-        </Button>
-        {form.kind === "paste" ? (
-          <Button
-            variant="primary"
-            disabled={doImport.isPending || preview.servers.length === 0 || preview.servers.every((p) => p.slugTaken)}
-            onClick={() => doImport.mutate(undefined)}
-          >
-            {preview.servers.length > 1 ? `Add ${preview.servers.length} servers` : "Add server"}
+      </>
+      )}
+      {view !== "picker" && (
+        <div className="mt-5 flex items-center gap-2 border-t border-border-soft pt-4">
+          {!editing && (
+            <Button variant="ghost" onClick={() => setView("picker")}>
+              <ArrowLeft size={13} /> Back
+            </Button>
+          )}
+          <span className="flex-1" />
+          <Button variant="ghost" onClick={onClose}>
+            Cancel
           </Button>
-        ) : (
-          <Button
-            variant="primary"
-            disabled={save.isPending || !form.name || (form.kind === "stdio" ? !form.command : !form.url)}
-            onClick={() => save.mutate(undefined)}
-          >
-            {editing ? "Save changes" : form.kind === "remote" && form.authType === "oauth" ? "Save & authorize" : "Add server"}
-          </Button>
-        )}
-      </div>
+          {view === "template" && template ? (
+            <Button
+              variant="primary"
+              disabled={saveTemplate.isPending || !tSlug || !templateReady(template, tValues)}
+              onClick={() => saveTemplate.mutate(undefined)}
+            >
+              {template.authType === "oauth" ? "Add & authorize" : "Add server"}
+            </Button>
+          ) : form.kind === "paste" ? (
+            <Button
+              variant="primary"
+              disabled={doImport.isPending || preview.servers.length === 0 || preview.servers.every((p) => p.slugTaken)}
+              onClick={() => doImport.mutate(undefined)}
+            >
+              {preview.servers.length > 1 ? `Add ${preview.servers.length} servers` : "Add server"}
+            </Button>
+          ) : (
+            <Button
+              variant="primary"
+              disabled={save.isPending || !form.name || (form.kind === "stdio" ? !form.command : !form.url)}
+              onClick={() => save.mutate(undefined)}
+            >
+              {editing ? "Save changes" : form.kind === "remote" && form.authType === "oauth" ? "Save & authorize" : "Add server"}
+            </Button>
+          )}
+        </div>
+      )}
     </Dialog>
   );
 }
@@ -578,7 +712,12 @@ export function ServersPage() {
           ))
         )}
       </div>
-      <ServerDialog open={dialogOpen} onClose={() => setDialogOpen(false)} editing={editing} />
+      <ServerDialog
+        open={dialogOpen}
+        onClose={() => setDialogOpen(false)}
+        editing={editing}
+        takenSlugs={new Set((servers ?? []).map((s) => s.slug))}
+      />
     </>
   );
 }
