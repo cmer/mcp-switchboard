@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
 import {
+  siAppsignal,
   siAtlassian,
   siBrave,
   siCloudflare,
@@ -152,6 +153,15 @@ const TEMPLATES: ServerTemplate[] = [
     logo: <Brand icon={siLinear} />,
     transport: "http",
     url: "https://mcp.linear.app/mcp",
+    authType: "oauth",
+  },
+  {
+    slug: "appsignal",
+    name: "AppSignal",
+    tagline: "Errors, traces, logs, metrics",
+    logo: <Brand icon={siAppsignal} />,
+    transport: "http",
+    url: "https://appsignal.com/api/mcp",
     authType: "oauth",
   },
   {
