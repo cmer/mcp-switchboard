@@ -8,8 +8,8 @@ const OPTIONS: { value: ThemeMode; label: string; icon: typeof Sun }[] = [
   { value: "system", label: "System", icon: Monitor },
 ];
 
-/** Segmented light / dark / system picker. `compact` drops the labels (sidebar). */
-export function ThemeToggle({ compact = false }: { compact?: boolean }) {
+/** Segmented light / dark / system picker. */
+export function ThemeToggle() {
   const { mode, setMode } = useTheme();
   return (
     <div
@@ -26,13 +26,12 @@ export function ThemeToggle({ compact = false }: { compact?: boolean }) {
           title={label}
           onClick={() => setMode(value)}
           className={cn(
-            "flex cursor-pointer items-center justify-center gap-1.5 rounded-lg text-[12.5px] font-medium tracking-tight transition-colors",
-            compact ? "px-2 py-1" : "px-2.5 py-1",
+            "flex cursor-pointer items-center justify-center gap-1.5 rounded-lg px-2.5 py-1 text-[12.5px] font-medium tracking-tight transition-colors",
             mode === value ? "bg-panel font-semibold text-foreground shadow-sm" : "text-muted-fg hover:text-foreground",
           )}
         >
-          <Icon size={compact ? 14 : 13} />
-          {!compact && label}
+          <Icon size={13} />
+          {label}
         </button>
       ))}
     </div>

@@ -11,8 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Light / dark / system theme switcher.** The dark palette was previously locked to the OS
   `prefers-color-scheme` setting with no way to override it. The choice now persists per
-  browser and, in system mode, still follows the OS live. The segmented picker sits in the
-  sidebar footer and in Settings → General (the sidebar is hidden below the `sm` breakpoint).
+  browser and, in system mode, still follows the OS live. The segmented picker lives in
+  Settings → General.
 - **Published to npm as `@cmer/mcp-switchboard`, runnable with `npx @cmer/mcp-switchboard`.**
   The package bundles the built UI alongside the compiled server, so trying the switchboard no
   longer requires cloning the repo or installing Docker. Docker remains the better fit for a
