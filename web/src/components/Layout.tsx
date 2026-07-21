@@ -62,7 +62,7 @@ export function Layout({ children }: { children: ReactNode }) {
             </NavLink>
           ))}
         </nav>
-        <div className="mt-auto px-2.5 font-mono text-[11px] text-faint">v0.1.0</div>
+        <div className="mt-auto px-2.5 font-mono text-[11px] text-faint">v{__APP_VERSION__}</div>
       </aside>
       <main className="min-w-0 flex-1 px-5 py-6 sm:px-7">
         <div className="mx-auto max-w-3xl">{children}</div>

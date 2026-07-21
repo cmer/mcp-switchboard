@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { serve } from "@hono/node-server";
 import { config, ensureDataDir } from "./config.js";
 import { initDb } from "./db/index.js";
@@ -10,7 +11,9 @@ import { AdminSessionStore } from "./http/adminAuth.js";
 import { createApp } from "./http/app.js";
 import type { AppContext } from "./http/context.js";
 
-const VERSION = "0.1.0";
+const VERSION = (
+  JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")) as { version: string }
+).version;
 
 async function main(): Promise<void> {
   const dataDir = ensureDataDir();

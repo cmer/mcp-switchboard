@@ -165,7 +165,7 @@ export function SettingsPage() {
       <div className="mt-4 rounded-[14px] border border-border bg-panel px-4 py-4 text-xs leading-relaxed text-muted-fg">
         <h2 className="mb-1 text-[15px] font-semibold tracking-tight text-foreground">About</h2>
         <p>
-          MCP Switchboard v0.1.0 · data lives in <code className="font-mono">data/</code> next to the server (SQLite + encryption
+          MCP Switchboard v{__APP_VERSION__} · data lives in <code className="font-mono">data/</code> next to the server (SQLite + encryption
           key). Backup = copy that directory. Set <code className="font-mono">PUBLIC_URL</code> if you access the switchboard via a
           LAN hostname so OAuth redirects come back to the right place.
         </p>
