@@ -2,6 +2,7 @@ import type { ReactNode } from "react";
 import { NavLink } from "react-router";
 import { Bot, Server, Settings } from "lucide-react";
 import { useAuthMe } from "@/lib/hooks";
+import { ThemeToggle } from "@/components/ThemeToggle";
 import { cn } from "@/lib/utils";
 
 function BrandMark() {
@@ -62,7 +63,10 @@ export function Layout({ children }: { children: ReactNode }) {
             </NavLink>
           ))}
         </nav>
-        <div className="mt-auto px-2.5 font-mono text-[11px] text-faint">v{__APP_VERSION__}</div>
+        <div className="mt-auto flex flex-col gap-2 px-2.5">
+          <ThemeToggle compact />
+          <div className="font-mono text-[11px] text-faint">v{__APP_VERSION__}</div>
+        </div>
       </aside>
       <main className="min-w-0 flex-1 px-5 py-6 sm:px-7">
         <div className="mx-auto max-w-3xl">{children}</div>

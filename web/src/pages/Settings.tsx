@@ -5,6 +5,7 @@ import { api } from "@/lib/api";
 import { useApiMutation, useAuthMe } from "@/lib/hooks";
 import { PageBar } from "@/components/Layout";
 import { Button, Field, Input, Switch } from "@/components/ui";
+import { ThemeToggle } from "@/components/ThemeToggle";
 
 function ChangePasswordForm({ authDisabled }: { authDisabled: boolean }) {
   const [currentPassword, setCurrentPassword] = useState("");
@@ -109,6 +110,13 @@ export function SettingsPage() {
       <div className="rounded-[14px] border border-border bg-panel px-4 py-4">
         <h2 className="mb-3 text-[15px] font-semibold tracking-tight">General</h2>
         <InstanceNameForm key={auth?.instanceName ?? ""} current={auth?.instanceName ?? null} />
+        <div className="mt-4 flex items-center justify-between gap-3 border-t border-border-soft pt-4">
+          <div>
+            <div className="text-[13px] font-medium">Appearance</div>
+            <div className="text-xs text-faint">System follows your OS light/dark setting.</div>
+          </div>
+          <ThemeToggle />
+        </div>
         <div className="mt-4 flex items-center gap-3 border-t border-border-soft pt-4">
           <Switch
             checked={auth?.autoEnableNewServers ?? false}

@@ -4,6 +4,19 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>MCP Switchboard</title>
+    <script>
+      // Resolve the theme before first paint so there is no flash.
+      (function () {
+        try {
+          var m = localStorage.getItem("switchboard.theme");
+          if (m !== "light" && m !== "dark") {
+            m = window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+          }
+          document.documentElement.dataset.theme = m;
+          document.documentElement.style.colorScheme = m;
+        } catch (e) {}
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>

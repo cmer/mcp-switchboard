@@ -23,8 +23,33 @@
   --code-bg: #f2f3f6;
 }
 
+/* The boot script in index.html always stamps data-theme on <html>, so the
+   media query below only matters before it runs (or if JS is off). */
+:root[data-theme="dark"] {
+  --background: #0a0b0e;
+  --panel: #141519;
+  --panel-2: #1a1b21;
+  --border: #262832;
+  --border-soft: #1e2027;
+  --foreground: #edeef2;
+  --muted-fg: #9ba1b0;
+  --faint: #676d7e;
+  --primary: #828cff;
+  --primary-2: #9aa2ff;
+  --primary-fg: #ffffff;
+  --primary-soft: rgba(130, 140, 255, 0.12);
+  --ok: #3dd68c;
+  --ok-bg: rgba(61, 214, 140, 0.13);
+  --warn: #f0b232;
+  --warn-bg: rgba(240, 178, 50, 0.13);
+  --err: #f8737c;
+  --err-bg: rgba(248, 115, 124, 0.11);
+  --off: #565c6b;
+  --code-bg: #0e0f13;
+}
+
 @media (prefers-color-scheme: dark) {
-  :root {
+  :root:not([data-theme]) {
     --background: #0a0b0e;
     --panel: #141519;
     --panel-2: #1a1b21;
