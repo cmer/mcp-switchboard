@@ -68,8 +68,8 @@ export interface TemplateInput {
   secret?: boolean;
   defaultValue?: string;
   /** Where the value lands in the create payload. */
-  apply: "env" | "header" | "urlParam";
-  /** Env var / header / query-param name. */
+  apply: "env" | "header" | "urlParam" | "bearer";
+  /** Env var / header / query-param name (unused for bearer). */
   name: string;
 }
 
@@ -132,7 +132,18 @@ const TEMPLATES: ServerTemplate[] = [
     logo: <Brand icon={siGithub} />,
     transport: "http",
     url: "https://api.githubcopilot.com/mcp/",
-    authType: "oauth",
+    note: "GitHub's OAuth server doesn't support dynamic client registration, so third-party clients sign in with a personal access token instead.",
+    inputs: [
+      {
+        key: "pat",
+        label: "Personal access token",
+        hint: "github.com/settings/tokens — needs repo access",
+        required: true,
+        secret: true,
+        apply: "bearer",
+        name: "Authorization",
+      },
+    ],
   },
   {
     slug: "linear",
@@ -382,18 +393,22 @@ export function templatePayload(
   }
   let url = t.url!;
   const headers: Record<string, string> = {};
+  let bearerToken: string | undefined;
   for (const inp of t.inputs ?? []) {
     const v = values[inp.key]?.trim();
     if (!v) continue;
     if (inp.apply === "header") headers[inp.name] = v;
+    else if (inp.apply === "bearer") bearerToken = v;
     else if (inp.apply === "urlParam") url += `${url.includes("?") ? "&" : "?"}${inp.name}=${encodeURIComponent(v)}`;
   }
-  const authType = t.authType === "oauth" ? "oauth" : Object.keys(headers).length > 0 ? "headers" : "none";
+  const authType =
+    t.authType === "oauth" ? "oauth" : bearerToken ? "bearer" : Object.keys(headers).length > 0 ? "headers" : "none";
   return {
     ...base,
     type: t.transport,
     url,
     authType,
+    ...(bearerToken ? { bearerToken } : {}),
     ...(Object.keys(headers).length > 0 ? { headers } : {}),
   };
 }

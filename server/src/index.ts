@@ -65,7 +65,9 @@ async function main(): Promise<void> {
   refresher.scheduleAll();
   hub.startGc();
 
-  serve({ fetch: app.fetch, port: config.port }, (info) => {
+  // overrideGlobalObjects: hono's lightweight Response subclass breaks
+  // `instanceof Response` checks in the MCP SDK's OAuth error parsing.
+  serve({ fetch: app.fetch, port: config.port, overrideGlobalObjects: false }, (info) => {
     console.log(`MCP Switchboard listening on http://localhost:${info.port}`);
     console.log(`  data dir:   ${config.dataDir}`);
     console.log(`  public url: ${config.publicUrl}`);

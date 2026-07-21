@@ -14,6 +14,8 @@ import {
   ReadResourceResultSchema,
   ResourceListChangedNotificationSchema,
   ToolListChangedNotificationSchema,
+  ErrorCode,
+  McpError,
   type Prompt,
   type Resource,
   type Tool,
@@ -266,6 +268,11 @@ export class UpstreamConnection {
     await this.refreshResources();
   }
 
+  /** Some servers advertise a capability but don't implement its list method. */
+  private static isMethodNotFound(err: unknown): boolean {
+    return err instanceof McpError && err.code === ErrorCode.MethodNotFound;
+  }
+
   private async refreshTools(): Promise<void> {
     const client = this.client;
     if (!client) return;
@@ -276,14 +283,18 @@ export class UpstreamConnection {
     }
     const all: Tool[] = [];
     let cursor: string | undefined;
-    do {
-      const page = await client.request(
-        { method: "tools/list", params: cursor ? { cursor } : {} },
-        ListToolsResultSchema,
-      );
-      all.push(...page.tools);
-      cursor = page.nextCursor;
-    } while (cursor);
+    try {
+      do {
+        const page = await client.request(
+          { method: "tools/list", params: cursor ? { cursor } : {} },
+          ListToolsResultSchema,
+        );
+        all.push(...page.tools);
+        cursor = page.nextCursor;
+      } while (cursor);
+    } catch (err) {
+      if (!UpstreamConnection.isMethodNotFound(err)) throw err;
+    }
     this.toolsCache = all;
   }
 
@@ -297,14 +308,18 @@ export class UpstreamConnection {
     }
     const all: Prompt[] = [];
     let cursor: string | undefined;
-    do {
-      const page = await client.request(
-        { method: "prompts/list", params: cursor ? { cursor } : {} },
-        ListPromptsResultSchema,
-      );
-      all.push(...page.prompts);
-      cursor = page.nextCursor;
-    } while (cursor);
+    try {
+      do {
+        const page = await client.request(
+          { method: "prompts/list", params: cursor ? { cursor } : {} },
+          ListPromptsResultSchema,
+        );
+        all.push(...page.prompts);
+        cursor = page.nextCursor;
+      } while (cursor);
+    } catch (err) {
+      if (!UpstreamConnection.isMethodNotFound(err)) throw err;
+    }
     this.promptsCache = all;
   }
 
@@ -318,14 +333,18 @@ export class UpstreamConnection {
     }
     const all: Resource[] = [];
     let cursor: string | undefined;
-    do {
-      const page = await client.request(
-        { method: "resources/list", params: cursor ? { cursor } : {} },
-        ListResourcesResultSchema,
-      );
-      all.push(...page.resources);
-      cursor = page.nextCursor;
-    } while (cursor);
+    try {
+      do {
+        const page = await client.request(
+          { method: "resources/list", params: cursor ? { cursor } : {} },
+          ListResourcesResultSchema,
+        );
+        all.push(...page.resources);
+        cursor = page.nextCursor;
+      } while (cursor);
+    } catch (err) {
+      if (!UpstreamConnection.isMethodNotFound(err)) throw err;
+    }
     this.resourcesCache = all;
   }
 

@@ -332,7 +332,12 @@ export function serverRoutes(ctx: AppContext): Hono {
       if (!authorizeUrl) return c.json({ error: "Authorization URL was not produced" }, 500);
       return c.json({ authorized: false, authorizeUrl });
     } catch (err) {
-      return c.json({ error: err instanceof Error ? err.message : String(err) }, 502);
+      let msg = err instanceof Error ? err.message : String(err);
+      if (/dynamic client registration/i.test(msg)) {
+        msg +=
+          " — this provider requires a pre-registered OAuth app, which MCP clients can't do automatically. Use a bearer token / API key instead (e.g. a GitHub personal access token).";
+      }
+      return c.json({ error: msg }, 502);
     }
   });
 
