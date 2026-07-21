@@ -1,5 +1,5 @@
 {
-  "name": "@cmer/mcp-switchboard",
+  "name": "mcp-switchboard-monorepo",
   "version": "1.0.1",
   "private": true,
   "type": "module",

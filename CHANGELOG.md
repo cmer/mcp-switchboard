@@ -5,6 +5,31 @@ All notable changes to MCP Switchboard are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **Light / dark / system theme switcher.** The dark palette was previously locked to the OS
+  `prefers-color-scheme` setting with no way to override it. The choice now persists per
+  browser and, in system mode, still follows the OS live. The segmented picker sits in the
+  sidebar footer and in Settings → General (the sidebar is hidden below the `sm` breakpoint).
+- **Published to npm as `@cmer/mcp-switchboard`, runnable with `npx @cmer/mcp-switchboard`.**
+  The package bundles the built UI alongside the compiled server, so trying the switchboard no
+  longer requires cloning the repo or installing Docker. Docker remains the better fit for a
+  long-running install.
+
+### Changed
+
+- **The data directory now defaults to `~/.config/mcp-switchboard`** (respecting
+  `XDG_CONFIG_HOME`) instead of `./data` relative to the working directory. The old default
+  meant the switchboard you got depended on which directory you launched it from — harmless
+  under Docker, which pins `DATA_DIR`, but a real hazard for `npx`, where it would scatter
+  databases and encryption keys across the filesystem. Existing installs keep working: if a
+  cwd-relative `data/switchboard.db` is found and the new location is empty, it is used and a
+  warning points at the new path. `DATA_DIR` still overrides everything.
+- The data directory is now created `0700`. It holds the encryption key and every stored OAuth
+  token, and was previously world-readable (the key file itself was already `0600`).
+
 ## [1.0.1] — 2026-07-21
 
 ### Added

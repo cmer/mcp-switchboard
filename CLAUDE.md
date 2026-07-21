@@ -6,7 +6,8 @@ Single-user homelab MCP switchboard (npm: `@cmer/mcp-switchboard`): configure MC
 
 - `server/` — Node 20+ TypeScript, Hono, `@modelcontextprotocol/sdk` **v1.x** (do NOT upgrade to v2 beta), better-sqlite3 + Drizzle, ESM (`.js` import suffixes required).
 - `web/` — React 19 + Vite + Tailwind v4 + shadcn-style components, TanStack Query, react-router. Dev server proxies `/api`, `/oauth`, `/mcp` to `:8787`.
-- `data/` — gitignored runtime state: `switchboard.db` (SQLite), `secret.key` (AES-256-GCM key). Never commit.
+- Runtime state (`switchboard.db`, `secret.key`) lives in `~/.config/mcp-switchboard` by default — see `server/src/config.ts` for the `DATA_DIR` > `XDG_CONFIG_HOME` > legacy-`./data` precedence. Never commit it.
+- `server/` is the published npm package `@cmer/mcp-switchboard` (root is a private workspace root). `scripts/prepack.mjs` bundles `web/dist` into `server/dist/web`; `npm run build` must run first.
 - Detailed design decisions: `/Users/carl/.claude/plans/looks-good-now-create-validated-eclipse.md` (SDK API facts, tricky-parts answers).
 
 ## Commands
@@ -15,6 +16,15 @@ Single-user homelab MCP switchboard (npm: `@cmer/mcp-switchboard`): configure MC
 - `npm run build` — web build then server tsc
 - `npm start` — production server serving `web/dist`
 - `npm test` — vitest in `server/`
+
+## Changelog
+
+Always keep unreleased changes tracked in `CHANGELOG.md` under an `## [Unreleased]` heading —
+add the entry as part of the change, not at release time. Follow the existing
+[Keep a Changelog](https://keepachangelog.com/en/1.1.0/) style: `### Added` / `### Changed` /
+`### Fixed` subsections, one bullet per user-visible change, bolded lead-in and the *why*
+(not just the *what*). Skip only for changes with no user-visible effect (refactors, comments,
+internal test churn). On release, rename `[Unreleased]` to the new version with the date.
 
 ## Key invariants
 

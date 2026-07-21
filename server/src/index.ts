@@ -1,3 +1,4 @@
+#!/usr/bin/env node
 import { readFileSync } from "node:fs";
 import { serve } from "@hono/node-server";
 import { config, ensureDataDir } from "./config.js";

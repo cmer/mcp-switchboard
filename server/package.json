@@ -1,14 +1,45 @@
 {
-  "name": "server",
+  "name": "@cmer/mcp-switchboard",
   "version": "1.0.1",
-  "private": true,
   "type": "module",
+  "description": "Self-hosted MCP switchboard: configure MCP servers once, give each coding agent its own endpoint and its own set of tools.",
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "claude",
+    "ai",
+    "gateway",
+    "proxy",
+    "self-hosted"
+  ],
+  "homepage": "https://github.com/cmer/mcp-switchboard#readme",
+  "bugs": "https://github.com/cmer/mcp-switchboard/issues",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/cmer/mcp-switchboard.git",
+    "directory": "server"
+  },
+  "license": "MIT",
+  "author": "Carl Mercier",
+  "bin": {
+    "mcp-switchboard": "dist/index.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": {
     "dev": "tsx watch src/index.ts",
     "build": "tsc -p tsconfig.json",
     "start": "node dist/index.js",
     "test": "vitest run",
-    "typecheck": "tsc -p tsconfig.json --noEmit"
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "prepack": "node ../scripts/prepack.mjs"
   },
   "dependencies": {
     "@hono/node-server": "^1.19.0",

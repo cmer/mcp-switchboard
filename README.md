@@ -25,13 +25,40 @@ A small self-hosted switchboard for MCP: put all your MCP servers in one place a
 
 ## Quick start
 
+Requires Node 20+.
+
+```bash
+npx @cmer/mcp-switchboard          # switchboard on http://localhost:8787
+```
+
+First visit prompts you to set the admin password. State lives in
+`~/.config/mcp-switchboard` — the same place on every run, so you can start it from anywhere.
+
+To install it properly rather than running it from the npx cache:
+
+```bash
+npm install -g @cmer/mcp-switchboard
+mcp-switchboard
+```
+
+Either way, the environment variables below still apply — e.g. to reach the switchboard from
+another machine on your LAN:
+
+```bash
+PUBLIC_URL=http://192.168.1.10:8787 npx @cmer/mcp-switchboard
+```
+
+For a long-running install, Docker (below) is the better fit.
+
+## From source
+
 ```bash
 npm install
 npm run build
 npm start          # serves UI + switchboard on http://localhost:8787
 ```
 
-First visit prompts you to set the admin password. Development mode (hot reload):
+Development mode (hot reload):
 
 ```bash
 npm run dev        # UI on http://localhost:5173, API/switchboard on :8787
@@ -64,12 +91,12 @@ Settings → General/Security covers the instance name, auto-enabling new server
 | Env var | Default | Purpose |
 | --- | --- | --- |
 | `PORT` | `8787` | HTTP port |
-| `DATA_DIR` | `./data` | SQLite DB + encryption key |
+| `DATA_DIR` | `~/.config/mcp-switchboard` | SQLite DB + encryption key (respects `XDG_CONFIG_HOME`; the Docker image sets this to `/app/data`) |
 | `PUBLIC_URL` | `http://localhost:8787` | Base URL for OAuth redirect URIs — set to the LAN URL you open in your browser |
 
-Backup = copy the `data/` directory (contains the database and the encryption key).
+Backup = copy the data directory (contains the database and the encryption key).
 
 ## Notes
 
-- Secrets (env vars, tokens) are AES-256-GCM encrypted at rest with a key in `data/secret.key`. stdio child processes still receive their env vars in plaintext, necessarily.
+- Secrets (env vars, tokens) are AES-256-GCM encrypted at rest with a key in `secret.key` inside the data directory, which is created `0700`. stdio child processes still receive their env vars in plaintext, necessarily.
 - No TLS and no multi-user support by design; put Caddy/Tailscale in front if you want transport security.
