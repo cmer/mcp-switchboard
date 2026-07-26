@@ -24,11 +24,28 @@ const MIME: Record<string, string> = {
   ".map": "application/json",
 };
 
-export function createApp(ctx: AppContext, webDist: string): Hono {
+/**
+ * The agent-facing MCP endpoint on its own app, so it can be served on a dedicated port with none
+ * of the admin surface (UI, REST API, OAuth callback) attached to that listener.
+ */
+export function createMcpApp(ctx: AppContext): Hono {
+  const app = new Hono();
+  app.all("/mcp/:agentSlug", mcpEndpointHandler(ctx));
+  app.all("*", (c) => c.json({ error: "Not found — this port only serves /mcp/<agent-slug>" }, 404));
+  return app;
+}
+
+export function createApp(ctx: AppContext, webDist: string, opts: { serveMcp?: boolean } = {}): Hono {
   const app = new Hono();
 
   // --- Agent-facing MCP endpoint (bearer auth, NOT admin-cookie auth) ---
-  app.all("/mcp/:agentSlug", mcpEndpointHandler(ctx));
+  // Skipped when MCP_PORT moved it to its own listener: serving it here too would defeat the
+  // point of separating the two ports.
+  if (opts.serveMcp !== false) {
+    app.all("/mcp/:agentSlug", mcpEndpointHandler(ctx));
+  } else {
+    app.all("/mcp/*", (c) => c.json({ error: "The MCP endpoint is served on MCP_PORT" }, 404));
+  }
 
   // --- OAuth callback (arrives via the admin's browser redirect) ---
   app.get("/oauth/callback", async (c) => {

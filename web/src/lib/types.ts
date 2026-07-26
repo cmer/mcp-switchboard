@@ -42,6 +42,8 @@ export interface AuthMe {
   authDisabled: boolean;
   instanceName: string | null;
   autoEnableNewServers: boolean;
+  /** Set when the MCP endpoint runs on its own port/host; null = same origin as the UI. */
+  mcpBaseUrl: string | null;
 }
 
 export type LogStatus = "pending" | "ok" | "error";

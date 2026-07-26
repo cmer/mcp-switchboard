@@ -5,6 +5,8 @@ import { defineConfig } from "vite";
 import pkg from "./package.json";
 
 const API_TARGET = `http://localhost:${process.env.API_PORT ?? 8787}`;
+// MCP_PORT gives the agent endpoint its own listener; follow it so dev mode keeps working.
+const MCP_TARGET = process.env.MCP_PORT ? `http://localhost:${process.env.MCP_PORT}` : API_TARGET;
 
 export default defineConfig({
   plugins: [react(), tailwindcss()],
@@ -21,7 +23,7 @@ export default defineConfig({
     proxy: {
       "/api": API_TARGET,
       "/oauth": API_TARGET,
-      "/mcp": API_TARGET,
+      "/mcp": MCP_TARGET,
     },
   },
 });
