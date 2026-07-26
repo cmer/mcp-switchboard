@@ -2,21 +2,27 @@ import { useMemo, useState } from "react";
 import { ChevronDown, ChevronUp, Plus } from "lucide-react";
 import { toast } from "sonner";
 import { api } from "@/lib/api";
-import { useAgents, useApiMutation, useServers } from "@/lib/hooks";
+import { useAgents, useApiMutation, useAuthMe, useServers } from "@/lib/hooks";
 import type { AgentInfo, ServerInfo } from "@/lib/types";
 import { PageBar } from "@/components/Layout";
 import { StatusDot, statusInfo } from "@/components/StatusDot";
 import { Badge, Button, CopyButton, Dialog, Field, Input, Switch, Tabs } from "@/components/ui";
 
-function endpointUrl(slug: string): string {
-  return `${window.location.origin}/mcp/${slug}`;
+/**
+ * The endpoint usually lives on the origin the UI is served from, but MCP_PORT can move it to its
+ * own port (or a separate public hostname), in which case the server tells us where.
+ */
+function useEndpointUrl(): (slug: string) => string {
+  const { data } = useAuthMe();
+  const base = data?.mcpBaseUrl || window.location.origin;
+  return (slug) => `${base}/mcp/${slug}`;
 }
 
 /* ---------- connect dialog ---------- */
 
 function ConnectDialog({ agent, open, onClose }: { agent: AgentInfo; open: boolean; onClose: () => void }) {
   const [tab, setTab] = useState<"claude" | "codex" | "json">("claude");
-  const url = endpointUrl(agent.slug);
+  const url = useEndpointUrl()(agent.slug);
 
   const snippets: Record<typeof tab, { caption: string; text: string }> = {
     claude: {
@@ -68,6 +74,7 @@ function AgentCard({ agent, servers }: { agent: AgentInfo; servers: ServerInfo[]
   const [expanded, setExpanded] = useState(false);
   const [revealed, setRevealed] = useState(false);
   const [connectOpen, setConnectOpen] = useState(false);
+  const endpoint = useEndpointUrl()(agent.slug);
 
   const enabledCount = agent.servers.filter((s) => s.enabled).length;
   const toolCount = useMemo(() => {
@@ -123,9 +130,9 @@ function AgentCard({ agent, servers }: { agent: AgentInfo; servers: ServerInfo[]
           <div className="mb-2 flex items-center gap-2">
             <span className="w-[72px] shrink-0 text-xs font-semibold text-muted-fg">Endpoint</span>
             <code className="min-w-0 flex-1 truncate rounded-lg border border-border-soft bg-code-bg px-2.5 py-1.5 font-mono text-xs">
-              {endpointUrl(agent.slug)}
+              {endpoint}
             </code>
-            <CopyButton text={endpointUrl(agent.slug)} />
+            <CopyButton text={endpoint} />
           </div>
           <div className="mb-2 flex items-center gap-2">
             <span className="w-[72px] shrink-0 text-xs font-semibold text-muted-fg">Token</span>

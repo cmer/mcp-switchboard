@@ -1,6 +1,7 @@
 import { Hono, type Context } from "hono";
 import { z } from "zod";
 import { eq } from "drizzle-orm";
+import { config } from "../../config.js";
 import { settings } from "../../db/schema.js";
 import { hashPassword, verifyPassword } from "../../lib/crypto.js";
 import { clearSessionCookie, getSessionId, setSessionCookie } from "../adminAuth.js";
@@ -47,6 +48,8 @@ export function authRoutes(ctx: AppContext): Hono {
       authDisabled: disabled,
       instanceName: getSetting(ctx, "instanceName") || null,
       autoEnableNewServers: getSetting(ctx, "autoEnableNewServers") === "1",
+      // null = the endpoint lives on this same origin, so the UI can use window.location.
+      mcpBaseUrl: config.mcpPublicUrl,
     });
   });
 

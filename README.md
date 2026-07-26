@@ -93,8 +93,28 @@ Settings → General/Security covers the instance name, auto-enabling new server
 | `PORT` | `8787` | HTTP port |
 | `DATA_DIR` | `~/.config/mcp-switchboard` | SQLite DB + encryption key (respects `XDG_CONFIG_HOME`; the Docker image sets this to `/app/data`) |
 | `PUBLIC_URL` | `http://localhost:8787` | Base URL for OAuth redirect URIs — set to the LAN URL you open in your browser |
+| `MCP_PORT` | same as `PORT` | Serve the agent endpoint on its own port (see below) |
+| `MCP_PUBLIC_URL` | `PUBLIC_URL` with `MCP_PORT` | Base URL agents use for `/mcp/<slug>`, shown in the connection snippets |
+| `HOST` | all interfaces | Interface to bind the UI/API listener to |
+| `MCP_HOST` | `HOST` | Interface to bind the MCP listener to |
 
 Backup = copy the data directory (contains the database and the encryption key).
+
+### Splitting the agent endpoint onto its own port
+
+By default one port serves everything: the UI, the REST API and `/mcp/<agent-slug>`. Set `MCP_PORT`
+and the switchboard opens a second listener — same process, same database, same upstream
+connections — that serves **only** the agent endpoint. The UI port stops serving `/mcp/*` entirely.
+
+```bash
+MCP_PORT=8788 HOST=127.0.0.1 MCP_HOST=0.0.0.0 mcp-switchboard
+```
+
+That combination keeps the admin UI on loopback (reach it via SSH tunnel or Tailscale) while the
+agent endpoint listens on every interface, ready to be forwarded or reverse-proxied to the outside.
+The endpoint is still bearer-token authenticated, and there is still no TLS — put Caddy or a tunnel
+in front of the MCP port before exposing it to the internet, and set `MCP_PUBLIC_URL` to the URL
+agents will actually use so the connection snippets in the UI match.
 
 ## Notes
 
