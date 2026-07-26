@@ -9,6 +9,7 @@ import type { AppContext } from "./context.js";
 import { mcpEndpointHandler } from "./mcpEndpoint.js";
 import { agentRoutes } from "./routes/agents.js";
 import { authRoutes, isAuthDisabled } from "./routes/auth.js";
+import { logRoutes } from "./routes/logs.js";
 import { serverRoutes } from "./routes/servers.js";
 
 const MIME: Record<string, string> = {
@@ -59,6 +60,7 @@ export function createApp(ctx: AppContext, webDist: string): Hono {
   api.use("*", adminAuthMiddleware(ctx.adminSessions, () => isAuthDisabled(ctx)));
   api.route("/servers", serverRoutes(ctx));
   api.route("/agents", agentRoutes(ctx));
+  api.route("/logs", logRoutes(ctx));
   api.get("/status", (c) =>
     c.json({
       version: ctx.version,

@@ -4,6 +4,7 @@ import { serve } from "@hono/node-server";
 import { config, ensureDataDir } from "./config.js";
 import { initDb } from "./db/index.js";
 import { loadOrCreateKey } from "./lib/crypto.js";
+import { RequestLogger } from "./core/requestLogger.js";
 import { SwitchboardHub } from "./core/switchboardHub.js";
 import { TokenRefresher } from "./core/tokenRefresher.js";
 import { UpstreamManager } from "./core/upstreamManager.js";
@@ -32,7 +33,8 @@ async function main(): Promise<void> {
     });
 
   const manager = new UpstreamManager(db, makeOAuthProvider);
-  const hub = new SwitchboardHub({ db, manager, version: VERSION });
+  const logger = new RequestLogger(db);
+  const hub = new SwitchboardHub({ db, manager, version: VERSION, logger });
 
   manager.onCachesChanged = (serverId, kind) => hub.notifyChanged(serverId, kind);
   manager.onStateChanged = (serverId, state) => {
@@ -54,6 +56,7 @@ async function main(): Promise<void> {
     db,
     manager,
     hub,
+    logger,
     refresher,
     adminSessions: new AdminSessionStore(db),
     makeOAuthProvider,
@@ -65,6 +68,7 @@ async function main(): Promise<void> {
   await manager.reconcile();
   refresher.scheduleAll();
   hub.startGc();
+  logger.startGc();
 
   // overrideGlobalObjects: hono's lightweight Response subclass breaks
   // `instanceof Response` checks in the MCP SDK's OAuth error parsing.
@@ -77,6 +81,7 @@ async function main(): Promise<void> {
   const shutdown = async (): Promise<void> => {
     console.log("Shutting down…");
     refresher.stopAll();
+    logger.stopGc();
     await hub.stopAll();
     await manager.stopAll();
     process.exit(0);

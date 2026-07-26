@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
-import { NavLink } from "react-router";
-import { Bot, Server, Settings } from "lucide-react";
+import { NavLink, useLocation } from "react-router";
+import { Bot, ScrollText, Server, Settings } from "lucide-react";
 import { useAuthMe } from "@/lib/hooks";
 import { cn } from "@/lib/utils";
 
@@ -25,12 +25,15 @@ function BrandMark() {
 const NAV = [
   { to: "/servers", label: "Servers", icon: Server },
   { to: "/agents", label: "Agents", icon: Bot },
+  { to: "/logs", label: "Logs", icon: ScrollText },
   { to: "/settings", label: "Settings", icon: Settings },
 ];
 
 export function Layout({ children }: { children: ReactNode }) {
   const { data: auth } = useAuthMe();
   const instanceName = auth?.instanceName ?? null;
+  // The log table needs more room than the forms-shaped pages.
+  const wide = useLocation().pathname.startsWith("/logs");
   return (
     <div className="flex min-h-screen">
       <aside className="hidden w-52 shrink-0 flex-col border-r border-border-soft bg-panel px-3 py-4 sm:flex">
@@ -65,7 +68,7 @@ export function Layout({ children }: { children: ReactNode }) {
         <div className="mt-auto px-2.5 font-mono text-[11px] text-faint">v{__APP_VERSION__}</div>
       </aside>
       <main className="min-w-0 flex-1 px-5 py-6 sm:px-7">
-        <div className="mx-auto max-w-3xl">{children}</div>
+        <div className={cn("mx-auto", wide ? "max-w-5xl" : "max-w-3xl")}>{children}</div>
       </main>
     </div>
   );

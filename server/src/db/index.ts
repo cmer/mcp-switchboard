@@ -60,6 +60,29 @@ CREATE TABLE IF NOT EXISTS oauth_credentials (
   status TEXT NOT NULL DEFAULT 'needs_auth',
   updated_at INTEGER NOT NULL
 );
+CREATE TABLE IF NOT EXISTS request_logs (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  ts INTEGER NOT NULL,
+  agent_id INTEGER,
+  agent_slug TEXT NOT NULL,
+  agent_name TEXT NOT NULL,
+  server_slug TEXT,
+  session_id TEXT,
+  rpc_id TEXT,
+  method TEXT NOT NULL,
+  target TEXT,
+  summary TEXT,
+  status TEXT NOT NULL DEFAULT 'pending',
+  duration_ms INTEGER,
+  error_code INTEGER,
+  error_message TEXT,
+  request_json TEXT,
+  response_json TEXT,
+  request_bytes INTEGER NOT NULL DEFAULT 0,
+  response_bytes INTEGER,
+  truncated INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS request_logs_ts ON request_logs(ts DESC);
 `;
 
 export function initDb(dataDir: string): Db {
