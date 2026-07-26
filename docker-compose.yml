@@ -5,9 +5,16 @@ services:
     restart: unless-stopped
     ports:
       - "8787:8787"
+      # Uncomment together with MCP_PORT below to expose the agent endpoint on its own port.
+      # Bind it to a specific host interface to control who can reach it, e.g. "0.0.0.0:8788:8788"
+      # for the agent endpoint while the UI above stays on "127.0.0.1:8787:8787".
+      # - "8788:8788"
     environment:
       # Set to the URL agents/browsers reach the switchboard at (used for OAuth redirects)
       - PUBLIC_URL=${PUBLIC_URL:-http://localhost:8787}
+      # Serve /mcp/<agent-slug> on a separate port from the UI/API (optional)
+      # - MCP_PORT=8788
+      # - MCP_PUBLIC_URL=${MCP_PUBLIC_URL:-http://localhost:8788}
     volumes:
       # SQLite db + encryption key — back this up
       - ./data:/app/data

@@ -3,7 +3,25 @@ import fs from "node:fs";
 import os from "node:os";
 import { fileURLToPath } from "node:url";
 
-const PORT = Number(process.env.PORT ?? 8787);
+function numericEnv(name: string, fallback: number): number {
+  const raw = process.env[name];
+  if (raw === undefined || raw.trim() === "") return fallback;
+  const value = Number(raw);
+  if (!Number.isInteger(value) || value < 0 || value > 65535) {
+    throw new Error(`${name} must be a port number between 0 and 65535 (got "${raw}")`);
+  }
+  return value;
+}
+
+const PORT = numericEnv("PORT", 8787);
+
+/**
+ * Optional second listener that serves *only* `/mcp/<agent-slug>`, so the agent endpoint can be
+ * exposed (firewall rule, reverse proxy, tunnel) without also exposing the admin UI and REST API.
+ * Same value as PORT means "one listener for everything", which is the default.
+ */
+const MCP_PORT = numericEnv("MCP_PORT", PORT);
+const mcpPort = MCP_PORT === PORT ? null : MCP_PORT;
 
 const moduleDir = path.dirname(fileURLToPath(import.meta.url));
 
@@ -43,11 +61,40 @@ function resolveWebDist(): string {
   return fs.existsSync(bundled) ? bundled : path.resolve(moduleDir, "../../web/dist");
 }
 
+const publicUrl = (process.env.PUBLIC_URL ?? `http://localhost:${PORT}`).replace(/\/$/, "");
+
+/**
+ * Base URL agents use for `/mcp/<slug>` (shown in the UI's connection snippets). Only meaningful
+ * once the MCP endpoint has its own port: default it to PUBLIC_URL with the port swapped, which is
+ * right for a LAN, and let MCP_PUBLIC_URL override it when the endpoint is fronted by a tunnel or
+ * reverse proxy on a different host entirely.
+ */
+function resolveMcpPublicUrl(): string | null {
+  const explicit = process.env.MCP_PUBLIC_URL;
+  if (explicit) return explicit.replace(/\/$/, "");
+  if (mcpPort === null) return null;
+  try {
+    const url = new URL(publicUrl);
+    url.port = String(mcpPort);
+    return url.toString().replace(/\/$/, "");
+  } catch {
+    return `http://localhost:${mcpPort}`;
+  }
+}
+
 export const config = {
   port: PORT,
+  /** Separate port for the agent-facing MCP endpoint, or null when it shares `port`. */
+  mcpPort,
+  /** Interface to bind; undefined = all interfaces (node's default). */
+  host: process.env.HOST || undefined,
+  /** Interface for the MCP listener; falls back to HOST when unset. */
+  mcpHost: process.env.MCP_HOST || process.env.HOST || undefined,
   dataDir: resolveDataDir(),
   /** Base URL the browser can reach the switchboard at; used for the OAuth redirect URI. */
-  publicUrl: (process.env.PUBLIC_URL ?? `http://localhost:${PORT}`).replace(/\/$/, ""),
+  publicUrl,
+  /** Base URL agents reach `/mcp/<slug>` at; null when it is the same origin as the UI. */
+  mcpPublicUrl: resolveMcpPublicUrl(),
   /** Directory containing the built web UI (production). */
   webDist: resolveWebDist(),
 };

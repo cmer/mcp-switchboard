@@ -5,6 +5,19 @@ All notable changes to MCP Switchboard are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **`MCP_PORT` puts the agent endpoint on its own port.** The UI, the REST API and the agent
+  endpoint all shared one port, so exposing `/mcp/<agent>` beyond the LAN meant exposing the admin
+  UI with it. Set `MCP_PORT` and the same process opens a second listener that serves *only*
+  `/mcp/<agent-slug>` — you can then firewall, tunnel or reverse-proxy that port on its own while
+  the UI stays on the trusted interface. Both listeners share the same database, upstream
+  connections and sessions. `HOST` / `MCP_HOST` bind each listener to a specific interface, and
+  `MCP_PUBLIC_URL` overrides the base URL shown in the connection snippets when the endpoint is
+  reached through a proxy or tunnel.
+
 ## [1.1.0] — 2026-07-21
 
 ### Added
