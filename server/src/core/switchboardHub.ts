@@ -92,6 +92,8 @@ export class SwitchboardHub {
         });
         const server = buildAgentServer(agent, this.deps);
         entry = { server, transport, lastSeen: Date.now() };
+        // Before connect(): the SDK chains onto whatever `onmessage` is already installed.
+        this.deps.logger?.attach(agent, transport);
         await server.connect(transport);
         return transport.handleRequest(req, { parsedBody: body });
       }

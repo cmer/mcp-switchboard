@@ -17,6 +17,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   connections and sessions. `HOST` / `MCP_HOST` bind each listener to a specific interface, and
   `MCP_PUBLIC_URL` overrides the base URL shown in the connection snippets when the endpoint is
   reached through a proxy or tunnel.
+- **Request logs.** A new Logs page records every JSON-RPC request an agent sent through the
+  switchboard and the response sent back, so "the agent says the tool failed" stops being a
+  guessing game. Each request is one line — time, agent, upstream server, tool name, arguments
+  preview, duration — that expands to the exact frames on the wire. Filter by agent, by server,
+  by method, or by errors / slow (>1s) / in-flight, and search across tool names, summaries and
+  error messages. Errors, slow calls and requests still in flight are distinguishable by shape,
+  not only colour. Headline counts for the last 24h (volume, error rate, median, p95) sit above
+  the list.
+- **The log tails live.** New requests appear as they arrive over a server-sent-events stream,
+  including long-running calls, which show up as in-flight the moment they start and update in
+  place when they finish. Some reverse proxies buffer or drop event streams; when the stream
+  can't be established the page falls back to polling and says so.
+- **Log retention and payload capture are configurable** in Settings → Logs. Requests are kept
+  for 48 hours by default and pruned automatically; shortening the window prunes immediately.
+  Full request/response payloads are recorded by default (capped at 32 KB per frame, with the
+  true size still reported) — turning capture off keeps the metadata but stores no frames, which
+  matters because tool arguments pass through unredacted.
 
 ## [1.1.0] — 2026-07-21
 

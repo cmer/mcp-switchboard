@@ -11,6 +11,7 @@ A small self-hosted switchboard for MCP: put all your MCP servers in one place a
 - **Paste to import** — paste a `claude mcp add …` command or an `mcpServers` JSON block into Add server → Paste config; the switchboard parses it (multiple entries supported) and shows a preview before creating.
 - **Namespaced tools** — `github__create_issue`, `google-work__gmail_search`. Multiple accounts of the same service are just multiple server entries with different slugs.
 - **Agents know which account is which** — give each server a description ("Work Gmail — carl@company.com") and the switchboard weaves it into every tool description, the server instructions roster, and a built-in `switchboard__list_servers` tool agents can call to see slug, purpose, status, and tool count.
+- **Request logs** — every request an agent sent and the response it got, one line each, expandable to the exact JSON-RPC frames. Filter by agent, server, method, or errors / slow / in-flight; the list tails live. Kept 48h by default; retention and payload capture are configurable in Settings.
 - **Homelab-simple auth** — one admin password for the UI, one bearer token per agent. Designed for a trusted LAN, not the public internet.
 
 | Add from a template | Paste to import (auth auto-detected) |

@@ -17,6 +17,7 @@ import { and, eq } from "drizzle-orm";
 import type { Db } from "../db/index.js";
 import { agentServers, servers, type AgentRow } from "../db/schema.js";
 import { nsName, nsResourceUri, parseNsName, parseNsResourceUri } from "./namespace.js";
+import type { RequestLogger } from "./requestLogger.js";
 import type { UpstreamConnection } from "./upstreamConnection.js";
 import type { UpstreamManager } from "./upstreamManager.js";
 
@@ -24,6 +25,8 @@ export interface AgentServerDeps {
   db: Db;
   manager: UpstreamManager;
   version: string;
+  /** Optional so tests can build agent servers without a logger. */
+  logger?: RequestLogger;
 }
 
 export const META_TOOL_LIST_SERVERS = "switchboard__list_servers";

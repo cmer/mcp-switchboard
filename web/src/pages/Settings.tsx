@@ -2,7 +2,8 @@ import { useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { api } from "@/lib/api";
-import { useApiMutation, useAuthMe } from "@/lib/hooks";
+import { useApiMutation, useAuthMe, useLogConfig } from "@/lib/hooks";
+import type { LogConfig } from "@/lib/types";
 import { PageBar } from "@/components/Layout";
 import { Button, Field, Input, Switch } from "@/components/ui";
 import { ThemeToggle } from "@/components/ThemeToggle";
@@ -82,6 +83,77 @@ function InstanceNameForm({ current }: { current: string | null }) {
   );
 }
 
+function LogSettingsForm() {
+  const { data: config } = useLogConfig();
+  const [hours, setHours] = useState<string | null>(null);
+  const [maxKb, setMaxKb] = useState<string | null>(null);
+
+  const save = useApiMutation(
+    (patch: Partial<LogConfig>) => api("/api/logs/settings", { method: "PUT", json: patch }),
+    ["log-config", "logs"],
+    () => toast.success("Saved"),
+  );
+
+  if (!config) return null;
+  const hoursValue = hours ?? String(config.retentionHours);
+  const maxKbValue = maxKb ?? String(config.maxPayloadKb);
+  const dirty = Number(hoursValue) !== config.retentionHours || Number(maxKbValue) !== config.maxPayloadKb;
+
+  return (
+    <>
+      <div className="flex items-center gap-3">
+        <Switch
+          checked={config.capturePayloads}
+          onChange={(capturePayloads) => save.mutate({ capturePayloads })}
+          label="Record request and response payloads"
+        />
+        <div>
+          <div className="text-[13px] font-medium">Record request and response payloads</div>
+          <div className="text-xs text-faint">
+            {config.capturePayloads
+              ? "Full JSON-RPC frames are stored, so tool arguments and results — including any secrets an agent passes through — sit in the database unredacted."
+              : "Only metadata is stored: who called what, when, how long it took, and how big the frames were."}
+          </div>
+        </div>
+      </div>
+
+      <div className="mt-4 flex max-w-lg flex-wrap items-end gap-2 border-t border-border-soft pt-4">
+        <div className="w-32">
+          <Field label="Keep for" hint="hours">
+            <Input
+              type="number"
+              min={1}
+              max={8760}
+              value={hoursValue}
+              onChange={(e) => setHours(e.target.value)}
+            />
+          </Field>
+        </div>
+        <div className="w-32">
+          <Field label="Payload cap" hint="KB">
+            <Input type="number" min={1} max={1024} value={maxKbValue} onChange={(e) => setMaxKb(e.target.value)} />
+          </Field>
+        </div>
+        <Button
+          variant="primary"
+          disabled={save.isPending || !dirty}
+          onClick={() => {
+            save.mutate({ retentionHours: Number(hoursValue), maxPayloadKb: Number(maxKbValue) });
+            setHours(null);
+            setMaxKb(null);
+          }}
+        >
+          Save
+        </Button>
+      </div>
+      <p className="mt-2 text-xs text-faint">
+        Older requests are deleted automatically; shortening the window prunes them right away. Frames larger than the
+        cap are clipped, but their true size is still recorded.
+      </p>
+    </>
+  );
+}
+
 export function SettingsPage() {
   const qc = useQueryClient();
   const { data: auth } = useAuthMe();
@@ -131,6 +203,11 @@ export function SettingsPage() {
             </div>
           </div>
         </div>
+      </div>
+
+      <div className="mt-4 rounded-[14px] border border-border bg-panel px-4 py-4">
+        <h2 className="mb-3 text-[15px] font-semibold tracking-tight">Logs</h2>
+        <LogSettingsForm />
       </div>
 
       <div className="mt-4 rounded-[14px] border border-border bg-panel px-4 py-4">

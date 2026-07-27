@@ -46,6 +46,59 @@ export interface AuthMe {
   mcpBaseUrl: string | null;
 }
 
+export type LogStatus = "pending" | "ok" | "error";
+
+/** One inbound request. Payloads are omitted here and fetched per row on expand. */
+export interface LogSummary {
+  id: number;
+  ts: number;
+  agentId: number | null;
+  agentSlug: string;
+  agentName: string;
+  /** null = the request spans every server enabled for the agent (tools/list, initialize …). */
+  serverSlug: string | null;
+  method: string;
+  target: string | null;
+  summary: string | null;
+  status: LogStatus;
+  durationMs: number | null;
+  errorCode: number | null;
+  errorMessage: string | null;
+  requestBytes: number;
+  responseBytes: number | null;
+}
+
+export interface LogDetail extends LogSummary {
+  sessionId: string | null;
+  rpcId: string | null;
+  requestJson: string | null;
+  responseJson: string | null;
+  truncated: boolean;
+}
+
+export interface LogConfig {
+  retentionHours: number;
+  capturePayloads: boolean;
+  maxPayloadKb: number;
+}
+
+export interface LogStats {
+  total: number;
+  errors: number;
+  medianMs: number | null;
+  p95Ms: number | null;
+}
+
+export type LogEvent = { type: "insert" | "update"; row: LogSummary };
+
+export interface LogFilters {
+  agent: string;
+  server: string;
+  method: string;
+  status: string;
+  q: string;
+}
+
 export interface ServerToolsInfo {
   tools: { name: string; namespacedName: string; description: string }[];
   prompts: { name: string; description: string }[];

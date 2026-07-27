@@ -1,9 +1,8 @@
 import { Hono, type Context } from "hono";
 import { z } from "zod";
-import { eq } from "drizzle-orm";
 import { config } from "../../config.js";
-import { settings } from "../../db/schema.js";
 import { hashPassword, verifyPassword } from "../../lib/crypto.js";
+import { readSetting, writeSetting } from "../../lib/settings.js";
 import { clearSessionCookie, getSessionId, setSessionCookie } from "../adminAuth.js";
 import type { AppContext } from "../context.js";
 
@@ -19,15 +18,11 @@ const authSettingsSchema = z.object({
 });
 
 export function getSetting(ctx: AppContext, key: string): string | null {
-  return ctx.db.select().from(settings).where(eq(settings.key, key)).get()?.value ?? null;
+  return readSetting(ctx.db, key);
 }
 
 function setSetting(ctx: AppContext, key: string, value: string): void {
-  ctx.db
-    .insert(settings)
-    .values({ key, value })
-    .onConflictDoUpdate({ target: settings.key, set: { value } })
-    .run();
+  writeSetting(ctx.db, key, value);
 }
 
 export function isAuthDisabled(ctx: AppContext): boolean {
