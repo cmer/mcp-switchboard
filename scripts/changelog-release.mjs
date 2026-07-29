@@ -1,6 +1,7 @@
 #!/usr/bin/env node
-// Promotes CHANGELOG.md's `## [Unreleased]` section to a dated release heading, adds the compare
-// link, and writes the section body out for `gh release create --notes-file`.
+// Promotes CHANGELOG.md's `## [Unreleased]` section to a dated release heading, leaves a fresh
+// empty `## [Unreleased]` in its place, adds the compare link, and writes the section body out for
+// `gh release create --notes-file`.
 //
 // Usage: node scripts/changelog-release.mjs <X.Y.Z> <notes-out-path>
 import fs from "node:fs";
@@ -35,17 +36,23 @@ if (!body) {
 const prev = (original.slice(start).match(/\n## \[(\d+\.\d+\.\d+)\]/) || [])[1];
 const date = new Date().toISOString().slice(0, 10);
 
-let updated = original.replace("## [Unreleased]", `## [${version}] — ${date}`);
+// Leave an empty `## [Unreleased]` behind so the next change has somewhere to go — otherwise the
+// heading only comes back if someone remembers to retype it, and a later release fails preflight.
+let updated = original.replace("## [Unreleased]", `## [Unreleased]\n\n## [${version}] — ${date}`);
 
 const repo = "https://github.com/cmer/mcp-switchboard";
 const link = prev
   ? `[${version}]: ${repo}/compare/v${prev}...v${version}`
   : `[${version}]: ${repo}/releases/tag/v${version}`;
+// `## [Unreleased]` is a link reference; without a definition it renders as literal brackets.
+// Repoint it at whatever lands after this release, replacing any definition from the last one.
+const unreleasedLink = `[Unreleased]: ${repo}/compare/v${version}...HEAD`;
+updated = updated.replace(/^\[Unreleased\]: .*\n/m, "");
 const prevLink = prev ? `[${prev}]: ` : null;
 updated =
   prevLink && updated.includes(`\n${prevLink}`)
-    ? updated.replace(`\n${prevLink}`, `\n${link}\n${prevLink}`)
-    : `${updated.trimEnd()}\n${link}\n`;
+    ? updated.replace(`\n${prevLink}`, `\n${unreleasedLink}\n${link}\n${prevLink}`)
+    : `${updated.trimEnd()}\n\n${unreleasedLink}\n${link}\n`;
 
 fs.writeFileSync(file, updated);
 fs.writeFileSync(notesOut, `${body}\n`);
