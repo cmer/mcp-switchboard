@@ -21,7 +21,7 @@ function useEndpointUrl(): (slug: string) => string {
 /* ---------- connect dialog ---------- */
 
 function ConnectDialog({ agent, open, onClose }: { agent: AgentInfo; open: boolean; onClose: () => void }) {
-  const [tab, setTab] = useState<"claude" | "codex" | "json">("claude");
+  const [tab, setTab] = useState<"claude" | "codex" | "ohmypi" | "json">("claude");
   const url = useEndpointUrl()(agent.slug);
 
   const snippets: Record<typeof tab, { caption: string; text: string }> = {
@@ -33,6 +33,10 @@ function ConnectDialog({ agent, open, onClose }: { agent: AgentInfo; open: boole
       caption: "config.toml",
       text: `[mcp_servers.switchboard]\nurl = "${url}"\nhttp_headers = { "Authorization" = "Bearer ${agent.token}" }`,
     },
+    ohmypi: {
+      caption: "Slash command",
+      text: `/mcp add switchboard --scope user \\\n  --url ${url} --transport http \\\n  --token ${agent.token}`,
+    },
     json: {
       caption: ".mcp.json",
       text: `{\n  "mcpServers": {\n    "switchboard": {\n      "type": "http",\n      "url": "${url}",\n      "headers": { "Authorization": "Bearer ${agent.token}" }\n    }\n  }\n}`,
@@ -41,13 +45,14 @@ function ConnectDialog({ agent, open, onClose }: { agent: AgentInfo; open: boole
   const current = snippets[tab];
 
   return (
-    <Dialog open={open} onClose={onClose} title={`Connect ${agent.name}`} description="Both forms register the switchboard as a single MCP server." wide>
+    <Dialog open={open} onClose={onClose} title={`Connect ${agent.name}`} description="Each form registers the switchboard as a single MCP server." wide>
       <Tabs
         value={tab}
         onChange={setTab}
         options={[
           { value: "claude", label: "Claude Code" },
           { value: "codex", label: "Codex" },
+          { value: "ohmypi", label: "Oh My Pi" },
           { value: "json", label: "Raw JSON" },
         ]}
       />

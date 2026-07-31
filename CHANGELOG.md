@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Oh My Pi connection snippet.** The connect dialog only covered Claude Code, Codex and raw JSON,
+  so Oh My Pi users had to hand-translate the URL and token into its `/mcp add` syntax. A fourth tab
+  now gives a ready-to-paste slash command.
+
 ## [1.2.0] — 2026-07-27
 
 ### Added
