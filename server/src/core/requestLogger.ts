@@ -5,7 +5,7 @@ import type { Db } from "../db/index.js";
 import { requestLogs, type AgentRow, type RequestLogRow } from "../db/schema.js";
 import { readBoolSetting, readNumberSetting } from "../lib/settings.js";
 import { parseNsName, parseNsResourceUri } from "./namespace.js";
-import { META_TOOL_LIST_SERVERS } from "./agentServerFactory.js";
+import { META_TOOL_CALL_TOOL, META_TOOL_PREFIX } from "./agentServerFactory.js";
 
 export const LOG_SETTING_KEYS = {
   retentionHours: "logs.retentionHours",
@@ -86,13 +86,29 @@ function describeRequest(method: string, params: Json | undefined): {
   const uri = typeof params?.uri === "string" ? params.uri : null;
 
   if ((method === "tools/call" || method === "prompts/get") && name) {
-    // The switchboard's own meta tool has no upstream server behind it.
-    const slug = name === META_TOOL_LIST_SERVERS ? null : (parseNsName(name)?.slug ?? null);
-    const args = params?.arguments;
+    const args = params?.arguments as Json | undefined;
+
+    // switchboard__call_tool is a wrapper: the row belongs to the tool it invokes, or the
+    // Logs page turns into a wall of identical wrapper rows.
+    if (method === "tools/call" && name === META_TOOL_CALL_TOOL && typeof args?.name === "string") {
+      const inner = args.name;
+      const innerArgs = args.arguments as Json | undefined;
+      return {
+        target: inner,
+        // A meta-tool as the inner name is rejected by the handler, but the row still must
+        // not attribute it to a phantom "switchboard" server.
+        serverSlug: inner.startsWith(META_TOOL_PREFIX) ? null : (parseNsName(inner)?.slug ?? null),
+        summary: innerArgs && Object.keys(innerArgs).length > 0 ? clip(JSON.stringify(innerArgs)) : null,
+      };
+    }
+
+    // The switchboard's own meta tools have no upstream server behind them; everything else
+    // is namespaced, so the prefix is the server.
+    const slug = name.startsWith(META_TOOL_PREFIX) ? null : (parseNsName(name)?.slug ?? null);
     return {
       target: name,
       serverSlug: slug,
-      summary: args && Object.keys(args as Json).length > 0 ? clip(JSON.stringify(args)) : null,
+      summary: args && Object.keys(args).length > 0 ? clip(JSON.stringify(args)) : null,
     };
   }
   if (method === "resources/read" && uri) {

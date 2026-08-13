@@ -128,6 +128,47 @@ describe("RequestLogger", () => {
     expect(latest().serverSlug).toBeNull();
   });
 
+  it("attributes every switchboard meta tool to no upstream server", async () => {
+    await roundTrip(
+      { jsonrpc: "2.0", id: 40, method: "tools/call", params: { name: "switchboard__add_server", arguments: { config: "x" } } },
+      { jsonrpc: "2.0", id: 40, result: { content: [] } },
+    );
+    const row = latest();
+    expect(row.serverSlug).toBeNull();
+    expect(row.target).toBe("switchboard__add_server");
+  });
+
+  it("attributes a switchboard__call_tool wrapper to the tool it invokes", async () => {
+    await roundTrip(
+      {
+        jsonrpc: "2.0",
+        id: 41,
+        method: "tools/call",
+        params: {
+          name: "switchboard__call_tool",
+          arguments: { name: "github__create_issue", arguments: { title: "Fix it" } },
+        },
+      },
+      { jsonrpc: "2.0", id: 41, result: { content: [] } },
+    );
+
+    const row = latest();
+    expect(row.target).toBe("github__create_issue");
+    expect(row.serverSlug).toBe("github");
+    expect(row.summary).toBe('{"title":"Fix it"}');
+  });
+
+  it("leaves the wrapper's own summary empty when the inner call takes no arguments", async () => {
+    await roundTrip(
+      { jsonrpc: "2.0", id: 42, method: "tools/call", params: { name: "switchboard__call_tool", arguments: { name: "github__whoami" } } },
+      { jsonrpc: "2.0", id: 42, result: { content: [] } },
+    );
+    const row = latest();
+    expect(row.target).toBe("github__whoami");
+    expect(row.serverSlug).toBe("github");
+    expect(row.summary).toBeNull();
+  });
+
   it("resolves the server from a namespaced resource URI", async () => {
     await roundTrip(
       { jsonrpc: "2.0", id: 5, method: "resources/read", params: { uri: "sb://github/README.md" } },

@@ -109,8 +109,8 @@ describe("resolveTarget", () => {
     expect(name).toBe("create_issue");
   });
 
-  it("rejects servers not enabled for this agent", () => {
-    expect(() => resolveTarget(deps, AGENT_ID, "linear__create_ticket")).toThrow(/not enabled/);
+  it("rejects servers not enabled for this agent, indistinguishably from unknown ones", () => {
+    expect(() => resolveTarget(deps, AGENT_ID, "linear__create_ticket")).toThrow('Unknown server "linear"');
   });
 
   it("rejects unknown servers and malformed names", () => {
