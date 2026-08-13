@@ -38,6 +38,7 @@ CREATE TABLE IF NOT EXISTS agents (
   name TEXT NOT NULL,
   token_enc TEXT NOT NULL,
   role TEXT NOT NULL DEFAULT 'standard',
+  tool_mode TEXT NOT NULL DEFAULT 'full',
   created_at INTEGER NOT NULL
 );
 CREATE TABLE IF NOT EXISTS agent_servers (
@@ -121,6 +122,9 @@ function migrate(sq: Database.Database): void {
   const agentCols = sq.prepare("PRAGMA table_info(agents)").all() as { name: string }[];
   if (!agentCols.some((c) => c.name === "role")) {
     sq.exec("ALTER TABLE agents ADD COLUMN role TEXT NOT NULL DEFAULT 'standard'");
+  }
+  if (!agentCols.some((c) => c.name === "tool_mode")) {
+    sq.exec("ALTER TABLE agents ADD COLUMN tool_mode TEXT NOT NULL DEFAULT 'full'");
   }
 }
 

@@ -3,7 +3,7 @@ import { ChevronDown, ChevronUp, Plus } from "lucide-react";
 import { toast } from "sonner";
 import { api } from "@/lib/api";
 import { useAgents, useApiMutation, useAuthMe, useServers } from "@/lib/hooks";
-import type { AgentInfo, AgentRole, ServerInfo } from "@/lib/types";
+import type { AgentInfo, AgentRole, ServerInfo, ToolMode } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { PageBar } from "@/components/Layout";
 import { StatusDot, statusInfo } from "@/components/StatusDot";
@@ -108,6 +108,11 @@ function AgentCard({ agent, servers }: { agent: AgentInfo; servers: ServerInfo[]
     ["agents"],
     () => toast.success("Role updated — live sessions pick it up on their next tools/list"),
   );
+  const setToolMode = useApiMutation(
+    (toolMode: ToolMode) => api(`/api/agents/${agent.id}`, { method: "PATCH", json: { toolMode } }),
+    ["agents"],
+    () => toast.success("Tool exposure updated — live sessions pick it up on their next tools/list"),
+  );
   const isManager = agent.role === "manager";
 
   const initials = agent.name
@@ -202,6 +207,27 @@ function AgentCard({ agent, servers }: { agent: AgentInfo; servers: ServerInfo[]
               <div className="text-xs leading-relaxed text-faint">
                 Manager agents can register remote MCP servers and change every agent's server assignments via MCP
                 tools. stdio servers still require your approval. Grant this only to agents you drive directly.
+              </div>
+            </div>
+          </div>
+
+          <div className="mb-4 flex items-start gap-3 rounded-[10px] border border-border-soft bg-panel-2/40 px-3 py-2.5">
+            {/* Tabs stretch their options, so cap the width to keep this a compact two-option control. */}
+            <div className="w-[160px] shrink-0">
+              <Tabs
+                value={agent.toolMode}
+                onChange={(v) => setToolMode.mutate(v)}
+                options={[
+                  { value: "full", label: "Full" },
+                  { value: "lean", label: "Lean" },
+                ]}
+              />
+            </div>
+            <div className="min-w-0">
+              <div className="text-[13px] font-medium">Tool exposure</div>
+              <div className="text-xs leading-relaxed text-faint">
+                Lean: agents discover tools via search instead of loading every schema — saves context for large
+                catalogs.
               </div>
             </div>
           </div>

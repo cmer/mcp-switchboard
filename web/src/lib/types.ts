@@ -31,12 +31,16 @@ export interface ServerInfo {
 /** `manager` agents may register remote servers and edit the matrix over MCP. */
 export type AgentRole = "standard" | "manager";
 
+/** `lean` agents get search/describe/call meta-tools instead of every proxied tool schema. */
+export type ToolMode = "full" | "lean";
+
 export interface AgentInfo {
   id: number;
   slug: string;
   name: string;
   token: string;
   role: AgentRole;
+  toolMode: ToolMode;
   createdAt: number;
   sessions: number;
   servers: { serverId: number; enabled: boolean }[];
