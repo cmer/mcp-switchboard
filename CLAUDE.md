@@ -34,6 +34,7 @@ internal test churn). On release, rename `[Unreleased]` to the new version with 
 - Secrets (env vars, bearer tokens, OAuth tokens) are AES-256-GCM encrypted at rest via `server/src/lib/crypto.ts`; REST responses never include decrypted secrets except agent tokens (needed by the UI for connection snippets).
 - OAuth: `DbOAuthProvider.redirectToAuthorization` only captures the URL (never auto-opens); `TokenRefresher` proactively renews at 80% of token lifetime — auth must never go stale.
 - `list_changed` notifications fan out to affected live agent sessions on any matrix toggle / server change.
+- Lean mode (`agents.tool_mode = 'lean'`) exposes a constant-size meta-tool surface (search/describe/call); upstream tool schemas must never be added to a lean `tools/list`.
 
 ## Verification
 
