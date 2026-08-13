@@ -1,4 +1,5 @@
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
+import type { RequestHandlerExtra } from "@modelcontextprotocol/sdk/shared/protocol.js";
 import {
   CallToolRequestSchema,
   ErrorCode,
@@ -11,11 +12,14 @@ import {
   ReadResourceRequestSchema,
   type Prompt,
   type Resource,
+  type ServerNotification,
+  type ServerRequest,
   type Tool,
 } from "@modelcontextprotocol/sdk/types.js";
 import { and, desc, eq, or } from "drizzle-orm";
 import { agentServers, agents, serverRequests, servers, type AgentRow } from "../db/schema.js";
 import { parseImport, type ParsedServer } from "../lib/importParser.js";
+import { schemaToTs } from "../lib/schemaToTs.js";
 import { readSetting } from "../lib/settings.js";
 import {
   addServers,
@@ -26,6 +30,7 @@ import {
 } from "./adminActions.js";
 import { nsName, nsResourceUri, parseNsName, parseNsResourceUri } from "./namespace.js";
 import type { RequestLogger } from "./requestLogger.js";
+import { paginate, searchTools, suggest, type SearchableTool } from "./toolSearch.js";
 import type { UpstreamConnection } from "./upstreamConnection.js";
 
 /**
@@ -46,6 +51,12 @@ export const META_TOOL_LIST_AGENTS = "switchboard__list_agents";
 export const META_TOOL_SERVER_STATUS = "switchboard__server_status";
 export const META_TOOL_REQUEST_SERVER = "switchboard__request_server";
 export const META_TOOL_REQUEST_STATUS = "switchboard__request_status";
+export const META_TOOL_SEARCH_TOOLS = "switchboard__search_tools";
+export const META_TOOL_DESCRIBE_TOOLS = "switchboard__describe_tools";
+export const META_TOOL_CALL_TOOL = "switchboard__call_tool";
+
+/** Every switchboard-owned tool is prefixed with the reserved slug, which no server may take. */
+export const META_TOOL_PREFIX = "switchboard__";
 
 /** Settings → General; "0" hides the request tools entirely. Unset (or anything else) = on. */
 const REQUESTS_SETTING_KEY = "allowServerRequests";
@@ -140,12 +151,92 @@ const REQUEST_TOOLS: Tool[] = [
 
 const REQUEST_TOOL_NAMES = new Set(REQUEST_TOOLS.map((t) => t.name));
 
+/** Shown to every agent in both modes: the roster is how a model picks between similar servers. */
+const LIST_SERVERS_TOOL: Tool = {
+  name: META_TOOL_LIST_SERVERS,
+  description:
+    "List the MCP servers behind this switchboard for this agent: slug (the tool-name prefix), what each server/account is for, connection status, and tool count. Call this when unsure which server's tools to use — e.g. which of several connected accounts of the same service.",
+  inputSchema: { type: "object", properties: {} },
+};
+
+/**
+ * Lean mode's whole tool surface: instead of proxying every upstream tool, the agent gets a
+ * constant three-call loop (search → describe → call). Descriptions stay terse because these
+ * three are re-sent on every `tools/list`, which is exactly the cost lean mode exists to cut.
+ */
+const LEAN_TOOLS: Tool[] = [
+  {
+    name: META_TOOL_SEARCH_TOOLS,
+    description:
+      'Search this agent\'s available tools by intent, e.g. "create calendar event" or "list github issues". Returns ranked matches; then call switchboard__describe_tools before calling one.',
+    inputSchema: {
+      type: "object",
+      properties: {
+        query: { type: "string", description: "Short intent phrase. Required unless `server` is given." },
+        server: {
+          type: "string",
+          description: "Restrict to one server slug (see the roster). With an empty query, enumerates that server's tools.",
+        },
+        limit: { type: "number", description: "Max results, default 10, cap 25." },
+        offset: { type: "number", description: "Pagination offset from a previous nextOffset." },
+      },
+    },
+  },
+  {
+    name: META_TOOL_DESCRIBE_TOOLS,
+    description:
+      "Get full details for tools found via switchboard__search_tools: description and input/output shapes as compact TypeScript.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        names: {
+          type: "array",
+          items: { type: "string" },
+          description: 'Namespaced tool names, e.g. ["gmail__send_email"]. Max 8 per call.',
+        },
+      },
+      required: ["names"],
+    },
+  },
+  {
+    name: META_TOOL_CALL_TOOL,
+    description:
+      'Call a tool by its namespaced name (from search results), e.g. { "name": "gmail__send_email", "arguments": { … } }.',
+    inputSchema: {
+      type: "object",
+      properties: {
+        name: { type: "string", description: "Namespaced tool name: <server>__<tool>." },
+        arguments: {
+          type: "object",
+          description: "Arguments matching the tool's inputType from switchboard__describe_tools.",
+        },
+      },
+      required: ["name"],
+    },
+  },
+];
+
+const LEAN_TOOL_NAMES = new Set(LEAN_TOOLS.map((t) => t.name));
+
+/** Search defaults: a page small enough to read, a cap small enough to stay cheap. */
+const SEARCH_LIMIT_DEFAULT = 10;
+const SEARCH_LIMIT_MAX = 25;
+/** Descriptions are for triage in search results; the full text comes back from describe. */
+const SEARCH_DESCRIPTION_CHARS = 160;
+/** Describing more than a handful at once defeats the point of not listing everything. */
+const DESCRIBE_MAX_NAMES = 8;
+
 const STDIO_PENDING_NOTE =
   "stdio servers require admin approval — the admin will see this request in the web UI";
 
 /** Read from the db on every call so a role toggle in the UI applies to sessions that are already live. */
 function agentRole(deps: AgentServerDeps, agentId: number): string {
   return deps.db.select({ role: agents.role }).from(agents).where(eq(agents.id, agentId)).get()?.role ?? "standard";
+}
+
+/** Same freshness argument as the role: a mode toggle in the UI must apply to sessions already live. */
+function toolMode(deps: AgentServerDeps, agentId: number): "full" | "lean" {
+  return deps.db.select({ mode: agents.toolMode }).from(agents).where(eq(agents.id, agentId)).get()?.mode ?? "full";
 }
 
 /** Same freshness argument as the role: read per call so the Settings toggle hits live sessions. */
@@ -155,6 +246,14 @@ function requestsEnabled(deps: AgentServerDeps): boolean {
 
 function jsonContent(value: unknown): { content: { type: "text"; text: string }[] } {
   return { content: [{ type: "text", text: JSON.stringify(value, null, 2) }] };
+}
+
+/**
+ * A mistake the model can recover from on its own (bad slug, no query) comes back as a tool
+ * error, not a protocol error: the model reads the text and retries in the same turn.
+ */
+function errorContent(text: string): { content: { type: "text"; text: string }[]; isError: true } {
+  return { content: [{ type: "text", text }], isError: true };
 }
 
 function requireString(args: Record<string, unknown>, key: string): string {
@@ -363,11 +462,23 @@ function buildInstructions(deps: AgentServerDeps, agentId: number): string {
       : rows
           .map((r) => `- ${r.slug}__* — ${r.name}${r.description ? `: ${r.description}` : ""}`)
           .join("\n");
-  const lines = [
-    "MCP Switchboard: aggregates multiple MCP servers. Tool and prompt names are prefixed with the upstream server slug as <server>__<name>; resource URIs as sb://<server>/….",
-    "When several servers expose similar tools (e.g. multiple accounts of the same service), pick by prefix using the roster below.",
-    `Call ${META_TOOL_LIST_SERVERS} for live status and details.`,
-  ];
+  // Lean mode's instructions carry the search→describe→call loop, because the tool list no
+  // longer shows the model what is available.
+  const lines =
+    toolMode(deps, agentId) === "lean"
+      ? [
+          "MCP Switchboard (lean mode): tools from multiple MCP servers are available by search, not listed upfront. Tool names are <server-slug>__<tool>.",
+          "Workflow:",
+          `1. ${META_TOOL_SEARCH_TOOLS} { query: "<intent + key nouns>" } — ranked matches.`,
+          `2. ${META_TOOL_DESCRIBE_TOOLS} { names: [...] } — input/output shapes as TypeScript.`,
+          `3. ${META_TOOL_CALL_TOOL} { name, arguments } — invoke the tool.`,
+          `Search again with the \`server\` filter or a different phrasing if the first query misses. Call ${META_TOOL_LIST_SERVERS} for the roster and live status.`,
+        ]
+      : [
+          "MCP Switchboard: aggregates multiple MCP servers. Tool and prompt names are prefixed with the upstream server slug as <server>__<name>; resource URIs as sb://<server>/….",
+          "When several servers expose similar tools (e.g. multiple accounts of the same service), pick by prefix using the roster below.",
+          `Call ${META_TOOL_LIST_SERVERS} for live status and details.`,
+        ];
   if (requestsEnabled(deps)) {
     lines.push(
       `Need a server that isn't listed? ${META_TOOL_REQUEST_SERVER} files it for the admin to approve (paste the config if you have one); ${META_TOOL_REQUEST_STATUS} reads the verdict back.`,
@@ -417,9 +528,209 @@ export function resolveTarget(
     .where(and(eq(agentServers.agentId, agentId), eq(agentServers.serverId, conn.serverId)))
     .get();
   if (!matrix?.enabled) {
-    throw new McpError(ErrorCode.InvalidParams, `Server "${parsed.slug}" is not enabled for this agent`);
+    // Deliberately identical to the unknown-server error so an agent cannot probe which slugs
+    // exist globally by comparing the two failures.
+    throw new McpError(ErrorCode.InvalidParams, `Unknown server "${parsed.slug}"`);
   }
   return { conn, name: parsed.name };
+}
+
+/**
+ * The catalog lean mode searches over, rebuilt per call: caches move (an upstream reconnects,
+ * the matrix changes) and a stale search space would offer tools that can no longer be called.
+ * Same projection as the full-mode tool list, minus the schemas.
+ */
+function searchSpace(deps: AgentServerDeps, agentId: number): SearchableTool[] {
+  const space: SearchableTool[] = [];
+  for (const conn of enabledConnections(deps, agentId)) {
+    for (const tool of conn.toolsCache) {
+      space.push({
+        name: nsName(conn.row.slug, tool.name),
+        server: conn.row.slug,
+        description: annotateDescription(conn.row.slug, conn.row.description, tool.description),
+      });
+    }
+  }
+  return space;
+}
+
+/** Non-numbers (and NaN) behave as "not given" so a model passing `"10"` gets the default, not an error. */
+function clampNumber(value: unknown, fallback: number, min: number, max: number): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) return fallback;
+  return Math.min(max, Math.max(min, Math.floor(value)));
+}
+
+function truncate(text: string | undefined, max: number): string | undefined {
+  if (text === undefined) return undefined;
+  return text.length > max ? `${text.slice(0, max)}…` : text;
+}
+
+function searchToolsTool(deps: AgentServerDeps, agentId: number, args: Record<string, unknown>) {
+  const space = searchSpace(deps, agentId);
+  const query = typeof args.query === "string" ? args.query.trim() : "";
+  const server = typeof args.server === "string" && args.server.trim() !== "" ? args.server.trim() : undefined;
+  const limit = clampNumber(args.limit, SEARCH_LIMIT_DEFAULT, 1, SEARCH_LIMIT_MAX);
+  const offset = clampNumber(args.offset, 0, 0, Number.MAX_SAFE_INTEGER);
+
+  // Dumping the whole catalog is exactly the cost lean mode exists to avoid, so an empty
+  // search is refused rather than answered.
+  if (query === "" && server === undefined) {
+    return errorContent('Provide a query (e.g. "send email"), or a server slug to enumerate one server\'s tools.');
+  }
+
+  if (server !== undefined) {
+    // Valid slugs come from this agent's own roster: an unknown slug never reveals another agent's servers.
+    const valid = matrixServers(deps, agentId)
+      .filter((r) => r.enabled)
+      .map((r) => r.slug);
+    if (!valid.includes(server)) {
+      return errorContent(
+        valid.length === 0
+          ? `Unknown server "${server}" — no servers are enabled for this agent.`
+          : `Unknown server "${server}" — this agent's servers are: ${valid.join(", ")}.`,
+      );
+    }
+  }
+
+  // Empty query + a server is the "show me what this one can do" case; scores are meaningless there.
+  const matches =
+    query === ""
+      ? space
+          .filter((tool) => tool.server === server)
+          .sort((a, b) => a.name.localeCompare(b.name))
+          .map((tool) => ({ ...tool, score: 0 }))
+      : searchTools(space, query, { server });
+
+  const page = paginate(matches, offset, limit);
+  return jsonContent({
+    items: page.items.map((match) => ({
+      name: match.name,
+      server: match.server,
+      // Clipped for output only — scoring already saw the full text.
+      description: truncate(match.description, SEARCH_DESCRIPTION_CHARS),
+      score: match.score,
+    })),
+    total: page.total,
+    hasMore: page.hasMore,
+    nextOffset: page.nextOffset,
+  });
+}
+
+/**
+ * One entry of a describe batch. A name the agent may not use is reported exactly like a name
+ * that does not exist — otherwise the error itself would disclose servers this agent lacks.
+ */
+function describeOne(
+  deps: AgentServerDeps,
+  agentId: number,
+  space: SearchableTool[],
+  name: string,
+): Record<string, unknown> {
+  const notFound = () => ({ name, error: "tool_not_found", suggestions: suggest(space, name, 3) });
+
+  let resolved: { conn: UpstreamConnection; name: string };
+  try {
+    resolved = resolveTarget(deps, agentId, name);
+  } catch {
+    return notFound();
+  }
+  const tool = resolved.conn.toolsCache.find((t) => t.name === resolved.name);
+  if (!tool) return notFound();
+
+  const entry: Record<string, unknown> = {
+    name,
+    server: resolved.conn.row.slug,
+    description: annotateDescription(resolved.conn.row.slug, resolved.conn.row.description, tool.description),
+  };
+  // Null-prototype so a def named `__proto__` or `constructor` is stored as an ordinary key.
+  const definitions: Record<string, string> = Object.create(null);
+  const outputDefinitions: Record<string, string> = Object.create(null);
+
+  // schemaToTs throws on anything that isn't a schema; one odd tool must not fail the batch,
+  // so that entry falls back to the raw JSON Schema.
+  const input = renderSchema(tool.inputSchema);
+  if (input) {
+    entry.inputType = input.type;
+    for (const [key, value] of Object.entries(input.definitions)) definitions[key] = value;
+  } else {
+    entry.inputSchema = tool.inputSchema;
+  }
+  if (tool.outputSchema !== undefined) {
+    const output = renderSchema(tool.outputSchema);
+    if (output) {
+      entry.outputType = output.type;
+      // Input and output schemas each carry their own `$defs` and routinely reuse names for
+      // different shapes. Overwriting would hand the model the wrong input contract, so a
+      // conflicting output def is kept apart instead; identical ones just merge.
+      for (const [key, value] of Object.entries(output.definitions)) {
+        if (!Object.hasOwn(definitions, key)) definitions[key] = value;
+        else if (definitions[key] !== value) outputDefinitions[key] = value;
+      }
+    } else {
+      entry.outputSchema = tool.outputSchema;
+    }
+  }
+  if (Object.keys(definitions).length > 0) entry.definitions = definitions;
+  if (Object.keys(outputDefinitions).length > 0) entry.outputDefinitions = outputDefinitions;
+  return entry;
+}
+
+function renderSchema(schema: unknown): { type: string; definitions: Record<string, string> } | null {
+  try {
+    return schemaToTs(schema);
+  } catch {
+    return null;
+  }
+}
+
+function describeToolsTool(deps: AgentServerDeps, agentId: number, args: Record<string, unknown>) {
+  const names = args.names;
+  if (!Array.isArray(names) || names.some((n) => typeof n !== "string")) {
+    throw new McpError(ErrorCode.InvalidParams, '"names" is required and must be an array of namespaced tool names');
+  }
+  if (names.length > DESCRIBE_MAX_NAMES) {
+    return errorContent(`Too many names — call with at most ${DESCRIBE_MAX_NAMES} per call.`);
+  }
+  const space = searchSpace(deps, agentId);
+  return jsonContent({ tools: (names as string[]).map((name) => describeOne(deps, agentId, space, name)) });
+}
+
+/**
+ * Progress forwarding for an upstream tool call, shared by the direct path and
+ * switchboard__call_tool — the two must behave identically for the same tool.
+ */
+function upstreamCallOpts(
+  progressToken: string | number | undefined,
+  extra: RequestHandlerExtra<ServerRequest, ServerNotification>,
+) {
+  return {
+    signal: extra.signal,
+    onprogress:
+      progressToken !== undefined
+        ? (p: { progress: number; total?: number; message?: string }) => {
+            void extra
+              .sendNotification({ method: "notifications/progress", params: { progressToken, ...p } })
+              .catch(() => {});
+          }
+        : undefined,
+  };
+}
+
+async function callToolTool(
+  deps: AgentServerDeps,
+  agentId: number,
+  args: Record<string, unknown>,
+  progressToken: string | number | undefined,
+  extra: RequestHandlerExtra<ServerRequest, ServerNotification>,
+) {
+  const name = requireString(args, "name");
+  // Wrapping a meta-tool would route it back through resolveTarget as server "switchboard".
+  if (name.startsWith(META_TOOL_PREFIX)) {
+    return errorContent(`Meta-tools are called directly, not through ${META_TOOL_CALL_TOOL}.`);
+  }
+  const { conn, name: bare } = resolveTarget(deps, agentId, name);
+  const toolArgs = args.arguments as Record<string, unknown> | undefined;
+  return conn.callTool(bare, toolArgs, upstreamCallOpts(progressToken, extra));
 }
 
 /** Build the agent-facing MCP server: aggregates enabled upstreams with namespaced names. */
@@ -432,33 +743,52 @@ export function buildAgentServer(agent: AgentRow, deps: AgentServerDeps): Server
         prompts: { listChanged: true },
         resources: { listChanged: true },
       },
+      // MCP delivers instructions only in the `initialize` result and has no
+      // `instructions_changed` notification, so the mode is read once here, at session build.
+      // Flipping the mode mid-session updates tools/list and tools/call behaviour immediately,
+      // but this session's instructions stay stale until the client re-initializes — a known
+      // protocol limitation, not something the switchboard can push.
       instructions: buildInstructions(deps, agent.id),
     },
   );
 
   server.setRequestHandler(ListToolsRequestSchema, async () => {
     const tools: Tool[] = [];
-    for (const conn of enabledConnections(deps, agent.id)) {
-      for (const tool of conn.toolsCache) {
-        tools.push({
-          ...tool,
-          name: nsName(conn.row.slug, tool.name),
-          description: annotateDescription(conn.row.slug, conn.row.description, tool.description),
-        });
+    // Lean mode's list is constant-size: upstream tools are reachable through search, not listed.
+    if (toolMode(deps, agent.id) === "lean") {
+      tools.push(...LEAN_TOOLS);
+    } else {
+      for (const conn of enabledConnections(deps, agent.id)) {
+        for (const tool of conn.toolsCache) {
+          tools.push({
+            ...tool,
+            name: nsName(conn.row.slug, tool.name),
+            description: annotateDescription(conn.row.slug, conn.row.description, tool.description),
+          });
+        }
       }
     }
-    tools.push({
-      name: META_TOOL_LIST_SERVERS,
-      description:
-        "List the MCP servers behind this switchboard for this agent: slug (the tool-name prefix), what each server/account is for, connection status, and tool count. Call this when unsure which server's tools to use — e.g. which of several connected accounts of the same service.",
-      inputSchema: { type: "object", properties: {} },
-    });
+    tools.push(LIST_SERVERS_TOOL);
     if (requestsEnabled(deps)) tools.push(...REQUEST_TOOLS);
     if (agentRole(deps, agent.id) === "manager") tools.push(...MANAGEMENT_TOOLS);
     return { tools };
   });
 
   server.setRequestHandler(CallToolRequestSchema, async (req, extra) => {
+    if (LEAN_TOOL_NAMES.has(req.params.name)) {
+      if (toolMode(deps, agent.id) !== "lean") {
+        throw new McpError(ErrorCode.InvalidParams, "This agent uses full tool exposure; call tools directly by name.");
+      }
+      const args = (req.params.arguments ?? {}) as Record<string, unknown>;
+      switch (req.params.name) {
+        case META_TOOL_SEARCH_TOOLS:
+          return searchToolsTool(deps, agent.id, args);
+        case META_TOOL_DESCRIBE_TOOLS:
+          return describeToolsTool(deps, agent.id, args);
+        default:
+          return callToolTool(deps, agent.id, args, req.params._meta?.progressToken, extra);
+      }
+    }
     if (REQUEST_TOOL_NAMES.has(req.params.name)) {
       if (!requestsEnabled(deps)) {
         throw new McpError(
@@ -505,19 +835,10 @@ export function buildAgentServer(agent: AgentRow, deps: AgentServerDeps): Server
       });
       return { content: [{ type: "text", text: JSON.stringify(catalog, null, 2) }] };
     }
+    // Lean mode hides upstream tools from the list but does not block them: an agent that already
+    // knows a namespaced name may still call it directly, with the same matrix enforcement.
     const { conn, name } = resolveTarget(deps, agent.id, req.params.name);
-    const progressToken = req.params._meta?.progressToken;
-    return conn.callTool(name, req.params.arguments, {
-      signal: extra.signal,
-      onprogress:
-        progressToken !== undefined
-          ? (p) => {
-              void extra
-                .sendNotification({ method: "notifications/progress", params: { progressToken, ...p } })
-                .catch(() => {});
-            }
-          : undefined,
-    });
+    return conn.callTool(name, req.params.arguments, upstreamCallOpts(req.params._meta?.progressToken, extra));
   });
 
   server.setRequestHandler(ListPromptsRequestSchema, async () => {
@@ -565,7 +886,9 @@ export function buildAgentServer(agent: AgentRow, deps: AgentServerDeps): Server
       .where(and(eq(agentServers.agentId, agent.id), eq(agentServers.serverId, conn.serverId)))
       .get();
     if (!matrix?.enabled) {
-      throw new McpError(ErrorCode.InvalidParams, `Server "${parsed.slug}" is not enabled for this agent`);
+      // Same error as an unknown server, for the same reason as in resolveTarget: a server this
+      // agent lacks must be indistinguishable from one that does not exist.
+      throw new McpError(ErrorCode.InvalidParams, `Unknown server "${parsed.slug}"`);
     }
     const result = await conn.readResource(parsed.uri, { signal: extra.signal });
     // Re-namespace URIs in the response so follow-up reads route correctly.

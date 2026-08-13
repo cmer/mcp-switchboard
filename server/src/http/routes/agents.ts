@@ -16,6 +16,7 @@ const patchSchema = z.object({
   name: z.string().min(1).max(100).optional(),
   slug: z.string().optional(),
   role: z.enum(["standard", "manager"]).optional(),
+  toolMode: z.enum(["full", "lean"]).optional(),
 });
 
 const matrixSchema = z.object({ enabled: z.boolean() });
@@ -33,6 +34,7 @@ function serialize(ctx: AppContext, row: AgentRow) {
     slug: row.slug,
     name: row.name,
     role: row.role,
+    toolMode: row.toolMode,
     token: decrypt(row.tokenEnc),
     createdAt: row.createdAt,
     sessions: ctx.hub.sessionCount(row.id),
@@ -80,8 +82,11 @@ export function agentRoutes(ctx: AppContext): Hono {
       if (clash && clash.id !== id) return c.json({ error: `Slug "${parsed.data.slug}" is already in use` }, 409);
     }
     const updated = ctx.db.update(agents).set(parsed.data).where(eq(agents.id, id)).returning().get();
-    // The management tools appear/disappear with the role — refresh live sessions.
-    if (parsed.data.role !== undefined && parsed.data.role !== row.role) ctx.hub.notifyAgent(id, "tools");
+    // Both fields reshape the advertised tool list — the role adds/removes the management tools,
+    // the tool mode swaps the proxied tools for meta-tools. One notify covers a patch touching both.
+    const roleChanged = parsed.data.role !== undefined && parsed.data.role !== row.role;
+    const toolModeChanged = parsed.data.toolMode !== undefined && parsed.data.toolMode !== row.toolMode;
+    if (roleChanged || toolModeChanged) ctx.hub.notifyAgent(id, "tools");
     return c.json(serialize(ctx, updated));
   });
 

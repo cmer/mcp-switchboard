@@ -41,6 +41,8 @@ export const agents = sqliteTable("agents", {
   tokenEnc: text("token_enc").notNull(),
   /** `manager` unlocks the switchboard__* management tools; text, so future tiers are values not migrations. */
   role: text("role").$type<"standard" | "manager">().notNull().default("standard"),
+  /** `lean` swaps the proxied tool list for search/describe/call meta-tools; text, so future modes are values not migrations. */
+  toolMode: text("tool_mode").$type<"full" | "lean">().notNull().default("full"),
   createdAt: integer("created_at").notNull(),
 });
 

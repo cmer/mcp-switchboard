@@ -9,6 +9,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Lean mode per agent.** An agent with 5–10 enabled servers can receive 100+ tool definitions —
+  tens of thousands of context tokens paid on every session for schemas it mostly never uses. A new
+  per-agent **Tool exposure** toggle (Agents page, default Full) switches an agent to **Lean**: its
+  `tools/list` shrinks to a constant-size set of meta-tools — `switchboard__search_tools` (ranked
+  lexical search over its enabled catalog), `switchboard__describe_tools` (full descriptions with
+  input/output shapes rendered as compact TypeScript instead of JSON Schema), and
+  `switchboard__call_tool` (invoke any enabled tool by namespaced name) — so tools are discovered on
+  demand via search → describe → call. The switch matrix still governs what is searchable and
+  callable, typo'd names come back with suggestions, the Logs page attributes wrapped calls to the
+  real upstream tool, and toggling the mode updates live sessions immediately.
+
+### Changed
+
+- **Calls to a server an agent lacks now fail exactly like calls to a server that doesn't exist.**
+  The two cases used to return different errors ("not enabled for this agent" vs "unknown server"),
+  which let any agent probe which server slugs were configured globally. Both now return the same
+  `Unknown server` error, so the switch matrix no longer leaks the existence of servers it hides.
+
+### Fixed
+
+- **Request logs no longer attribute `switchboard__*` meta-tool calls to a phantom "switchboard"
+  server.** Management and request meta-tools were logged with `switchboard` as their upstream
+  server — a server that doesn't exist — polluting the Logs page's server filter. They now log with
+  no upstream server, like the other switchboard-native rows.
+
 - **Agents can register MCP servers themselves.** Discovering a useful server used to mean relaying
   its config to a human to paste into the UI. An agent granted the new **manager** role (a per-agent
   toggle on the Agents page, off by default) gets `switchboard__add_server` — paste the same
