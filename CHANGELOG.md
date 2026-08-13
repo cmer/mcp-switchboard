@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Agents can register MCP servers themselves.** Discovering a useful server used to mean relaying
+  its config to a human to paste into the UI. An agent granted the new **manager** role (a per-agent
+  toggle on the Agents page, off by default) gets `switchboard__add_server` — paste the same
+  `claude mcp add …` line or `mcpServers` JSON found in a README and the server is created, enabled,
+  and its tools appear in the same live session — plus `switchboard__assign_server`,
+  `switchboard__list_agents` and `switchboard__server_status` to manage the matrix and self-debug.
+  Local stdio servers are the deliberate exception: they execute a command on your machine, so no
+  agent can create one directly, whatever its role.
+- **A request/approval queue keeps humans in the loop.** Every agent (manager or not) gets
+  `switchboard__request_server`: it files the ask — with a pasted config or just a reason — and
+  returns immediately. Pending requests show as a badge in the UI with a review panel that renders
+  stdio commands in a "this will execute on your machine" warning block; approving one creates the
+  server through the same path as the UI and pushes the new tools into the requesting agent's
+  still-open session. Denials carry an optional note the agent reads back with
+  `switchboard__request_status`. Stored request configs are encrypted at rest like every other
+  secret, and a Settings toggle hides the request tools entirely if you'd rather agents couldn't
+  ask. Servers created by agents show an "added by" chip for provenance, and because meta-tool
+  calls are ordinary MCP requests, every management action lands in the request logs.
+
 ## [1.3.0] — 2026-07-31
 
 ### Added

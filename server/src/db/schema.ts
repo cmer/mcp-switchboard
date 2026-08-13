@@ -23,6 +23,8 @@ export const servers = sqliteTable("servers", {
   authType: text("auth_type").$type<"none" | "bearer" | "headers" | "oauth">().notNull().default("none"),
   bearerTokenEnc: text("bearer_token_enc"),
   headersJsonEnc: text("headers_json_enc"),
+  /** Provenance for servers registered by an agent; denormalised so it survives agent deletion. */
+  createdByAgentSlug: text("created_by_agent_slug"),
   createdAt: integer("created_at").notNull(),
   updatedAt: integer("updated_at").notNull(),
 });
@@ -37,6 +39,8 @@ export const agents = sqliteTable("agents", {
   slug: text("slug").notNull().unique(),
   name: text("name").notNull(),
   tokenEnc: text("token_enc").notNull(),
+  /** `manager` unlocks the switchboard__* management tools; text, so future tiers are values not migrations. */
+  role: text("role").$type<"standard" | "manager">().notNull().default("standard"),
   createdAt: integer("created_at").notNull(),
 });
 
@@ -106,7 +110,28 @@ export const requestLogs = sqliteTable("request_logs", {
   truncated: integer("truncated", { mode: "boolean" }).notNull().default(false),
 });
 
+/**
+ * Agent-filed asks that need a human: a parsed config to approve (`add_server`) or a plain
+ * request in words (`freeform`). stdio configs from the management tools land here too —
+ * spawning a command on the host is never granted to a tool call.
+ */
+export const serverRequests = sqliteTable("server_requests", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  /** Nullable + denormalised slug, like request_logs: the request survives the agent. */
+  requestedByAgentId: integer("requested_by_agent_id"),
+  requestedByAgentSlug: text("requested_by_agent_slug").notNull(),
+  kind: text("kind").$type<"add_server" | "freeform">().notNull(),
+  /** Encrypted ParsedServer JSON — a pasted config can carry env values and bearer tokens. */
+  payloadJsonEnc: text("payload_json_enc"),
+  reason: text("reason"),
+  status: text("status").$type<"pending" | "approved" | "denied">().notNull().default("pending"),
+  resolutionNote: text("resolution_note"),
+  createdAt: integer("created_at").notNull(),
+  resolvedAt: integer("resolved_at"),
+});
+
 export type ServerRow = typeof servers.$inferSelect;
 export type AgentRow = typeof agents.$inferSelect;
 export type OAuthCredentialRow = typeof oauthCredentials.$inferSelect;
 export type RequestLogRow = typeof requestLogs.$inferSelect;
+export type ServerRequestRow = typeof serverRequests.$inferSelect;

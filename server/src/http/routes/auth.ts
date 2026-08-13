@@ -15,6 +15,7 @@ const authSettingsSchema = z.object({
   authDisabled: z.boolean().optional(),
   instanceName: z.string().max(60).nullish(),
   autoEnableNewServers: z.boolean().optional(),
+  allowServerRequests: z.boolean().optional(),
 });
 
 export function getSetting(ctx: AppContext, key: string): string | null {
@@ -43,6 +44,8 @@ export function authRoutes(ctx: AppContext): Hono {
       authDisabled: disabled,
       instanceName: getSetting(ctx, "instanceName") || null,
       autoEnableNewServers: getSetting(ctx, "autoEnableNewServers") === "1",
+      // On unless explicitly switched off — the request tools are the safe path for every agent.
+      allowServerRequests: getSetting(ctx, "allowServerRequests") !== "0",
       // null = the endpoint lives on this same origin, so the UI can use window.location.
       mcpBaseUrl: config.mcpPublicUrl,
     });
@@ -105,6 +108,10 @@ export function authRoutes(ctx: AppContext): Hono {
 
     if (body.data.autoEnableNewServers !== undefined) {
       setSetting(ctx, "autoEnableNewServers", body.data.autoEnableNewServers ? "1" : "0");
+    }
+
+    if (body.data.allowServerRequests !== undefined) {
+      setSetting(ctx, "allowServerRequests", body.data.allowServerRequests ? "1" : "0");
     }
 
     if (body.data.authDisabled !== undefined) {

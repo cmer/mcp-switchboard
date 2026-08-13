@@ -1,10 +1,11 @@
 import { Hono } from "hono";
 import { z } from "zod";
-import { and, eq } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 import { agentServers, agents, servers, type AgentRow } from "../../db/schema.js";
 import { decrypt, encrypt, randomToken } from "../../lib/crypto.js";
 import { isValidSlug, slugify } from "../../lib/slug.js";
-import type { AppContext } from "../context.js";
+import { setMatrix } from "../../core/adminActions.js";
+import { adminDeps, type AppContext } from "../context.js";
 
 const createSchema = z.object({
   name: z.string().min(1).max(100),
@@ -14,6 +15,7 @@ const createSchema = z.object({
 const patchSchema = z.object({
   name: z.string().min(1).max(100).optional(),
   slug: z.string().optional(),
+  role: z.enum(["standard", "manager"]).optional(),
 });
 
 const matrixSchema = z.object({ enabled: z.boolean() });
@@ -30,6 +32,7 @@ function serialize(ctx: AppContext, row: AgentRow) {
     id: row.id,
     slug: row.slug,
     name: row.name,
+    role: row.role,
     token: decrypt(row.tokenEnc),
     createdAt: row.createdAt,
     sessions: ctx.hub.sessionCount(row.id),
@@ -77,6 +80,8 @@ export function agentRoutes(ctx: AppContext): Hono {
       if (clash && clash.id !== id) return c.json({ error: `Slug "${parsed.data.slug}" is already in use` }, 409);
     }
     const updated = ctx.db.update(agents).set(parsed.data).where(eq(agents.id, id)).returning().get();
+    // The management tools appear/disappear with the role — refresh live sessions.
+    if (parsed.data.role !== undefined && parsed.data.role !== row.role) ctx.hub.notifyAgent(id, "tools");
     return c.json(serialize(ctx, updated));
   });
 
@@ -114,22 +119,7 @@ export function agentRoutes(ctx: AppContext): Hono {
     const parsed = matrixSchema.safeParse(await c.req.json().catch(() => null));
     if (!parsed.success) return c.json({ error: "Body must be { enabled: boolean }" }, 400);
 
-    const existing = ctx.db
-      .select()
-      .from(agentServers)
-      .where(and(eq(agentServers.agentId, agentId), eq(agentServers.serverId, serverId)))
-      .get();
-    if (existing) {
-      ctx.db
-        .update(agentServers)
-        .set({ enabled: parsed.data.enabled })
-        .where(and(eq(agentServers.agentId, agentId), eq(agentServers.serverId, serverId)))
-        .run();
-    } else {
-      ctx.db.insert(agentServers).values({ agentId, serverId, enabled: parsed.data.enabled }).run();
-    }
-    // Live sessions of this agent see the change immediately.
-    ctx.hub.notifyAgent(agentId);
+    setMatrix(adminDeps(ctx), agentId, serverId, parsed.data.enabled);
     return c.json(serialize(ctx, agent));
   });
 

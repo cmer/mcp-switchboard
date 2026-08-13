@@ -7,6 +7,7 @@ import { useApiMutation, useServerLogs, useServers, useServerTools } from "@/lib
 import { SERVER_TEMPLATES, templatePayload, templateReady, type ServerTemplate } from "@/lib/templates";
 import type { ServerInfo } from "@/lib/types";
 import { PageBar } from "@/components/Layout";
+import { ServerRequestsPanel } from "@/components/ServerRequests";
 import { StatusDot, statusInfo } from "@/components/StatusDot";
 import { Badge, Button, CopyButton, Dialog, Field, Input, Select, Switch, Tabs, Textarea } from "@/components/ui";
 
@@ -636,6 +637,11 @@ function ServerRow({ server, onEdit }: { server: ServerInfo; onEdit: () => void 
             {subline}
           </div>
         </button>
+        {server.createdByAgentSlug && (
+          <Badge className="hidden font-mono lg:inline-flex" title={`Registered over MCP by ${server.createdByAgentSlug}`}>
+            added by {server.createdByAgentSlug}
+          </Badge>
+        )}
         <Badge className="hidden md:inline-flex">{transportLabel}</Badge>
         {server.enabled && status.text === "Needs auth" ? (
           <Button size="sm" onClick={() => void startOAuth(server.id)}>
@@ -691,6 +697,7 @@ export function ServersPage() {
           </Button>
         }
       />
+      <ServerRequestsPanel />
       <div className="divide-y divide-border-soft rounded-[14px] border border-border bg-panel">
         {isLoading ? (
           <p className="px-4 py-8 text-center text-sm text-faint">Loading…</p>

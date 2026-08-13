@@ -12,10 +12,13 @@ import type {
   LogStats,
   LogSummary,
   ServerInfo,
+  ServerRequest,
   ServerToolsInfo,
 } from "./types";
 
 const POLL_MS = 4000;
+/** Requests arrive at human speed — no need to poll them as hard as connection state. */
+const REQUESTS_POLL_MS = 15000;
 
 export function useAuthMe() {
   return useQuery({ queryKey: ["auth"], queryFn: () => api<AuthMe>("/api/auth/me") });
@@ -35,6 +38,19 @@ export function useAgents(enabled = true) {
     queryKey: ["agents"],
     queryFn: () => api<AgentInfo[]>("/api/agents"),
     refetchInterval: POLL_MS,
+    enabled,
+  });
+}
+
+/**
+ * Server requests filed by agents, newest first. Shared query key, so the nav badge
+ * and the review panel ride the same poll.
+ */
+export function useServerRequests(enabled = true) {
+  return useQuery({
+    queryKey: ["requests"],
+    queryFn: () => api<ServerRequest[]>("/api/requests"),
+    refetchInterval: REQUESTS_POLL_MS,
     enabled,
   });
 }
