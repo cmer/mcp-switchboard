@@ -28,6 +28,7 @@ CREATE TABLE IF NOT EXISTS servers (
   auth_type TEXT NOT NULL DEFAULT 'none',
   bearer_token_enc TEXT,
   headers_json_enc TEXT,
+  created_by_agent_slug TEXT,
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL
 );
@@ -36,6 +37,7 @@ CREATE TABLE IF NOT EXISTS agents (
   slug TEXT NOT NULL UNIQUE,
   name TEXT NOT NULL,
   token_enc TEXT NOT NULL,
+  role TEXT NOT NULL DEFAULT 'standard',
   created_at INTEGER NOT NULL
 );
 CREATE TABLE IF NOT EXISTS agent_servers (
@@ -83,6 +85,18 @@ CREATE TABLE IF NOT EXISTS request_logs (
   truncated INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS request_logs_ts ON request_logs(ts DESC);
+CREATE TABLE IF NOT EXISTS server_requests (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  requested_by_agent_id INTEGER,
+  requested_by_agent_slug TEXT NOT NULL,
+  kind TEXT NOT NULL,
+  payload_json_enc TEXT,
+  reason TEXT,
+  status TEXT NOT NULL DEFAULT 'pending',
+  resolution_note TEXT,
+  created_at INTEGER NOT NULL,
+  resolved_at INTEGER
+);
 `;
 
 export function initDb(dataDir: string): Db {
@@ -97,9 +111,16 @@ export function initDb(dataDir: string): Db {
 
 /** Additive migrations for databases created before a column existed. */
 function migrate(sq: Database.Database): void {
-  const cols = sq.prepare("PRAGMA table_info(servers)").all() as { name: string }[];
-  if (!cols.some((c) => c.name === "description")) {
+  const serverCols = sq.prepare("PRAGMA table_info(servers)").all() as { name: string }[];
+  if (!serverCols.some((c) => c.name === "description")) {
     sq.exec("ALTER TABLE servers ADD COLUMN description TEXT");
+  }
+  if (!serverCols.some((c) => c.name === "created_by_agent_slug")) {
+    sq.exec("ALTER TABLE servers ADD COLUMN created_by_agent_slug TEXT");
+  }
+  const agentCols = sq.prepare("PRAGMA table_info(agents)").all() as { name: string }[];
+  if (!agentCols.some((c) => c.name === "role")) {
+    sq.exec("ALTER TABLE agents ADD COLUMN role TEXT NOT NULL DEFAULT 'standard'");
   }
 }
 

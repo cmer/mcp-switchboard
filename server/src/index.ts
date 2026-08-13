@@ -4,6 +4,7 @@ import { serve } from "@hono/node-server";
 import { config, ensureDataDir } from "./config.js";
 import { initDb } from "./db/index.js";
 import { loadOrCreateKey } from "./lib/crypto.js";
+import type { AgentServerDeps } from "./core/agentServerFactory.js";
 import { RequestLogger } from "./core/requestLogger.js";
 import { SwitchboardHub } from "./core/switchboardHub.js";
 import { TokenRefresher } from "./core/tokenRefresher.js";
@@ -34,7 +35,12 @@ async function main(): Promise<void> {
 
   const manager = new UpstreamManager(db, makeOAuthProvider);
   const logger = new RequestLogger(db);
-  const hub = new SwitchboardHub({ db, manager, version: VERSION, logger });
+  // The hub builds agent servers, so the fan-out callbacks the management
+  // meta-tools need are patched in after it exists rather than injected.
+  const agentDeps: AgentServerDeps = { db, manager, version: VERSION, logger };
+  const hub = new SwitchboardHub(agentDeps);
+  agentDeps.notifyAgent = (agentId, kind) => hub.notifyAgent(agentId, kind);
+  agentDeps.reconcile = () => manager.reconcile();
 
   manager.onCachesChanged = (serverId, kind) => hub.notifyChanged(serverId, kind);
   manager.onStateChanged = (serverId, state) => {

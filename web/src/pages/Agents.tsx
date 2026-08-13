@@ -3,7 +3,8 @@ import { ChevronDown, ChevronUp, Plus } from "lucide-react";
 import { toast } from "sonner";
 import { api } from "@/lib/api";
 import { useAgents, useApiMutation, useAuthMe, useServers } from "@/lib/hooks";
-import type { AgentInfo, ServerInfo } from "@/lib/types";
+import type { AgentInfo, AgentRole, ServerInfo } from "@/lib/types";
+import { cn } from "@/lib/utils";
 import { PageBar } from "@/components/Layout";
 import { StatusDot, statusInfo } from "@/components/StatusDot";
 import { Badge, Button, CopyButton, Dialog, Field, Input, Switch, Tabs } from "@/components/ui";
@@ -102,6 +103,12 @@ function AgentCard({ agent, servers }: { agent: AgentInfo; servers: ServerInfo[]
     ["agents"],
     () => toast.success("Agent deleted"),
   );
+  const setRole = useApiMutation(
+    (role: AgentRole) => api(`/api/agents/${agent.id}`, { method: "PATCH", json: { role } }),
+    ["agents"],
+    () => toast.success("Role updated — live sessions pick it up on their next tools/list"),
+  );
+  const isManager = agent.role === "manager";
 
   const initials = agent.name
     .split(/\s+/)
@@ -122,6 +129,11 @@ function AgentCard({ agent, servers }: { agent: AgentInfo; servers: ServerInfo[]
             {enabledCount} of {servers.length} servers · {toolCount} tools exposed
           </span>
         </span>
+        {isManager && (
+          <Badge className="border-transparent bg-warn-bg font-semibold text-warn" title="Can register remote servers and edit every agent's server assignments over MCP">
+            manager
+          </Badge>
+        )}
         {agent.sessions > 0 ? (
           <Badge className="border-transparent bg-ok-bg font-semibold text-ok">connected</Badge>
         ) : (
@@ -172,6 +184,26 @@ function AgentCard({ agent, servers }: { agent: AgentInfo; servers: ServerInfo[]
             >
               Delete
             </Button>
+          </div>
+
+          <div
+            className={cn(
+              "mb-4 flex items-start gap-3 rounded-[10px] border px-3 py-2.5",
+              isManager ? "border-warn/40 bg-warn-bg" : "border-border-soft bg-panel-2/40",
+            )}
+          >
+            <Switch
+              checked={isManager}
+              onChange={(v) => setRole.mutate(v ? "manager" : "standard")}
+              label={`Manager role for ${agent.name}`}
+            />
+            <div className="min-w-0">
+              <div className="text-[13px] font-medium">Manager</div>
+              <div className="text-xs leading-relaxed text-faint">
+                Manager agents can register remote MCP servers and change every agent's server assignments via MCP
+                tools. stdio servers still require your approval. Grant this only to agents you drive directly.
+              </div>
+            </div>
           </div>
 
           <div className="mb-2 flex items-baseline justify-between">

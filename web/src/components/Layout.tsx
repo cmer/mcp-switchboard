@@ -1,7 +1,7 @@
 import type { ReactNode } from "react";
 import { NavLink, useLocation } from "react-router";
 import { Bot, ScrollText, Server, Settings } from "lucide-react";
-import { useAuthMe } from "@/lib/hooks";
+import { useAuthMe, useServerRequests } from "@/lib/hooks";
 import { cn } from "@/lib/utils";
 
 function BrandMark() {
@@ -31,7 +31,10 @@ const NAV = [
 
 export function Layout({ children }: { children: ReactNode }) {
   const { data: auth } = useAuthMe();
+  const { data: requests } = useServerRequests();
   const instanceName = auth?.instanceName ?? null;
+  // Requests are reviewed on the Servers page, so that's where the badge points.
+  const pending = (requests ?? []).filter((r) => r.status === "pending").length;
   // The log table needs more room than the forms-shaped pages.
   const wide = useLocation().pathname.startsWith("/logs");
   return (
@@ -60,6 +63,14 @@ export function Layout({ children }: { children: ReactNode }) {
                 <>
                   <Icon size={15} className={cn(isActive && "text-primary")} />
                   {label}
+                  {to === "/servers" && pending > 0 && (
+                    <span
+                      title={`${pending} agent request${pending === 1 ? "" : "s"} waiting for review`}
+                      className="ml-auto inline-flex min-w-[19px] justify-center rounded-full bg-warn-bg px-1.5 py-0.5 text-[10.5px] font-semibold tabular-nums text-warn"
+                    >
+                      {pending}
+                    </span>
+                  )}
                 </>
               )}
             </NavLink>

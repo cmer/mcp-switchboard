@@ -169,6 +169,11 @@ export function SettingsPage() {
     ["auth"],
     () => toast.success("Saved"),
   );
+  const setAllowRequests = useApiMutation(
+    (on: boolean) => api("/api/auth/settings", { method: "POST", json: { allowServerRequests: on } }),
+    ["auth"],
+    () => toast.success("Saved"),
+  );
 
   const logout = async () => {
     await api("/api/auth/logout", { method: "POST" });
@@ -200,6 +205,19 @@ export function SettingsPage() {
             <div className="text-xs text-faint">
               When on, a newly added server is switched on for every agent automatically. When off, servers start
               disabled and you opt them in per agent.
+            </div>
+          </div>
+        </div>
+        <div className="mt-4 flex items-center gap-3 border-t border-border-soft pt-4">
+          <Switch
+            checked={auth?.allowServerRequests ?? true}
+            onChange={(v) => setAllowRequests.mutate(v)}
+            label="Allow agents to request servers"
+          />
+          <div>
+            <div className="text-[13px] font-medium">Allow agents to request servers</div>
+            <div className="text-xs text-faint">
+              Adds a request tool to every agent so they can ask you for new MCP servers.
             </div>
           </div>
         </div>

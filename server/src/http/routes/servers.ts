@@ -2,14 +2,13 @@ import { Hono } from "hono";
 import { z } from "zod";
 import { and, eq } from "drizzle-orm";
 import { auth } from "@modelcontextprotocol/sdk/client/auth.js";
-import { agentServers, agents, oauthCredentials, servers, type ServerRow } from "../../db/schema.js";
+import { agentServers, oauthCredentials, servers, type ServerRow } from "../../db/schema.js";
 import { decrypt, encrypt } from "../../lib/crypto.js";
-import { probeAuth, type ProbeResult } from "../../lib/authProbe.js";
-import { parseImport, type ParsedServer } from "../../lib/importParser.js";
-import { isReservedSlug, isValidSlug, slugify } from "../../lib/slug.js";
+import { parseImport } from "../../lib/importParser.js";
+import { isReservedSlug, isValidSlug } from "../../lib/slug.js";
+import { addServers, detectAuth, insertServer } from "../../core/adminActions.js";
 import { nsName } from "../../core/namespace.js";
-import { getSetting } from "./auth.js";
-import type { AppContext } from "../context.js";
+import { adminDeps, type AppContext } from "../context.js";
 
 const createSchema = z.object({
   name: z.string().min(1).max(100),
@@ -36,7 +35,8 @@ const patchSchema = createSchema.partial().extend({
   headers: z.record(z.string(), z.string()).nullish(),
 });
 
-function serialize(ctx: AppContext, row: ServerRow) {
+/** Exported so an approved request can return exactly the shape GET /api/servers/:id does. */
+export function serializeServer(ctx: AppContext, row: ServerRow) {
   const conn = ctx.manager.get(row.id);
   const oauthRow =
     row.authType === "oauth"
@@ -59,6 +59,7 @@ function serialize(ctx: AppContext, row: ServerRow) {
     hasBearerToken: !!row.bearerTokenEnc,
     hasHeaders: !!row.headersJsonEnc,
     headerKeys: row.headersJsonEnc ? Object.keys(JSON.parse(decrypt(row.headersJsonEnc)) as Record<string, string>) : [],
+    createdByAgentSlug: row.createdByAgentSlug,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
     // live status
@@ -80,89 +81,23 @@ function affectedAgents(ctx: AppContext, serverId: number): number[] {
     .map((r) => r.agentId);
 }
 
-type CreateInput = z.infer<typeof createSchema>;
-
-/** Shared by POST / and POST /import. Does NOT reconcile — callers do that once. */
-function insertServer(ctx: AppContext, input: CreateInput): { row: ServerRow } | { error: string; status: 400 | 409 } {
-  const slug = input.slug ?? slugify(input.name);
-  if (!isValidSlug(slug)) {
-    return { error: "Slug must be 1-64 chars of a-z, 0-9, and dashes (no underscores)", status: 400 };
-  }
-  if (isReservedSlug(slug)) {
-    return { error: `Slug "${slug}" is reserved for the switchboard's own tools`, status: 400 };
-  }
-  if (ctx.db.select().from(servers).where(eq(servers.slug, slug)).get()) {
-    return { error: `Slug "${slug}" is already in use`, status: 409 };
-  }
-  if (input.type === "stdio" && !input.command) return { error: "Local servers need a command", status: 400 };
-  if (input.type !== "stdio" && !input.url) return { error: "Remote servers need a URL", status: 400 };
-
-  const now = Date.now();
-  const row = ctx.db
-    .insert(servers)
-    .values({
-      slug,
-      name: input.name,
-      description: input.description ?? null,
-      type: input.type,
-      enabled: input.enabled,
-      command: input.command ?? null,
-      argsJson: input.args ? JSON.stringify(input.args) : null,
-      envJsonEnc: input.env && Object.keys(input.env).length > 0 ? encrypt(JSON.stringify(input.env)) : null,
-      cwd: input.cwd ?? null,
-      url: input.url ?? null,
-      authType: input.type === "stdio" ? "none" : input.authType,
-      bearerTokenEnc: input.bearerToken ? encrypt(input.bearerToken) : null,
-      headersJsonEnc:
-        input.headers && Object.keys(input.headers).length > 0 ? encrypt(JSON.stringify(input.headers)) : null,
-      createdAt: now,
-      updatedAt: now,
-    })
-    .returning()
-    .get();
-
-  if (row.authType === "oauth") {
-    ctx.db.insert(oauthCredentials).values({ serverId: row.id, status: "needs_auth", updatedAt: now }).run();
-  }
-
-  // Optional convenience (Settings → General): new servers start enabled for every agent.
-  if (getSetting(ctx, "autoEnableNewServers") === "1") {
-    for (const agent of ctx.db.select({ id: agents.id }).from(agents).all()) {
-      ctx.db.insert(agentServers).values({ agentId: agent.id, serverId: row.id, enabled: true }).run();
-    }
-  }
-  return { row };
-}
-
 const importSchema = z.object({ text: z.string().min(1), dryRun: z.boolean().optional().default(false) });
-
-/**
- * Probe remote no-auth entries in parallel to detect servers that actually
- * require OAuth (or some token) before we save a config that would just 401.
- */
-async function detectAuth(parsed: ParsedServer[]): Promise<(ProbeResult | null)[]> {
-  return Promise.all(
-    parsed.map((p) =>
-      p.type !== "stdio" && p.authType === "none" && p.url ? probeAuth(p.url) : Promise.resolve(null),
-    ),
-  );
-}
 
 export function serverRoutes(ctx: AppContext): Hono {
   const app = new Hono();
 
   app.get("/", (c) => {
     const rows = ctx.db.select().from(servers).all();
-    return c.json(rows.map((r) => serialize(ctx, r)));
+    return c.json(rows.map((r) => serializeServer(ctx, r)));
   });
 
   app.post("/", async (c) => {
     const parsed = createSchema.safeParse(await c.req.json().catch(() => null));
     if (!parsed.success) return c.json({ error: parsed.error.issues[0]?.message ?? "Invalid input" }, 400);
-    const result = insertServer(ctx, parsed.data);
+    const result = insertServer(adminDeps(ctx), parsed.data);
     if ("error" in result) return c.json({ error: result.error }, result.status);
     await ctx.manager.reconcile();
-    return c.json(serialize(ctx, result.row), 201);
+    return c.json(serializeServer(ctx, result.row), 201);
   });
 
   app.post("/import", async (c) => {
@@ -176,14 +111,11 @@ export function serverRoutes(ctx: AppContext): Hono {
       return c.json({ error: err instanceof Error ? err.message : "Could not parse input" }, 400);
     }
 
-    const detected = await detectAuth(parsed);
-    // A detected OAuth server is imported as OAuth so it lands on "Needs auth"
-    // with a one-click Authorize instead of failing with a 401.
-    for (let i = 0; i < parsed.length; i++) {
-      if (detected[i] === "oauth") parsed[i].authType = "oauth";
-    }
-
     if (body.data.dryRun) {
+      const detected = await detectAuth(parsed);
+      for (let i = 0; i < parsed.length; i++) {
+        if (detected[i] === "oauth") parsed[i].authType = "oauth";
+      }
       return c.json({
         servers: parsed.map((p, i) => ({
           name: p.name,
@@ -200,21 +132,20 @@ export function serverRoutes(ctx: AppContext): Hono {
       });
     }
 
-    const created: ReturnType<typeof serialize>[] = [];
+    const results = await addServers(adminDeps(ctx), parsed);
+    const created: ReturnType<typeof serializeServer>[] = [];
     const errors: { name: string; error: string }[] = [];
-    for (const p of parsed) {
-      const result = insertServer(ctx, { enabled: true, ...p });
-      if ("error" in result) errors.push({ name: p.name, error: result.error });
-      else created.push(serialize(ctx, result.row));
-    }
-    if (created.length > 0) await ctx.manager.reconcile();
+    results.forEach((result, i) => {
+      if ("error" in result) errors.push({ name: parsed[i].name, error: result.error });
+      else created.push(serializeServer(ctx, result.row));
+    });
     return c.json({ created, errors }, errors.length > 0 && created.length === 0 ? 400 : 201);
   });
 
   app.get("/:id", (c) => {
     const row = ctx.db.select().from(servers).where(eq(servers.id, Number(c.req.param("id")))).get();
     if (!row) return c.json({ error: "Not found" }, 404);
-    return c.json(serialize(ctx, row));
+    return c.json(serializeServer(ctx, row));
   });
 
   app.patch("/:id", async (c) => {
@@ -271,7 +202,7 @@ export function serverRoutes(ctx: AppContext): Hono {
     }
     await ctx.manager.reconcile();
     for (const agentId of affected) ctx.hub.notifyAgent(agentId);
-    return c.json(serialize(ctx, updated));
+    return c.json(serializeServer(ctx, updated));
   });
 
   app.delete("/:id", async (c) => {

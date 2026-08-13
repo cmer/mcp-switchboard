@@ -10,6 +10,7 @@ import { mcpEndpointHandler } from "./mcpEndpoint.js";
 import { agentRoutes } from "./routes/agents.js";
 import { authRoutes, isAuthDisabled } from "./routes/auth.js";
 import { logRoutes } from "./routes/logs.js";
+import { requestRoutes } from "./routes/requests.js";
 import { serverRoutes } from "./routes/servers.js";
 
 const MIME: Record<string, string> = {
@@ -78,6 +79,7 @@ export function createApp(ctx: AppContext, webDist: string, opts: { serveMcp?: b
   api.route("/servers", serverRoutes(ctx));
   api.route("/agents", agentRoutes(ctx));
   api.route("/logs", logRoutes(ctx));
+  api.route("/requests", requestRoutes(ctx));
   api.get("/status", (c) =>
     c.json({
       version: ctx.version,

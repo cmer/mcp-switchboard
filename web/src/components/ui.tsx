@@ -83,9 +83,10 @@ export function Select({ className, ...props }: React.SelectHTMLAttributes<HTMLS
 
 /* ---------- Badge ---------- */
 
-export function Badge({ className, children }: { className?: string; children: ReactNode }) {
+export function Badge({ className, title, children }: { className?: string; title?: string; children: ReactNode }) {
   return (
     <span
+      title={title}
       className={cn(
         "inline-flex items-center whitespace-nowrap rounded-full border border-border-soft bg-panel-2 px-2.5 py-1 text-[11px] font-medium text-muted-fg",
         className,
