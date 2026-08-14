@@ -4,6 +4,8 @@
  * POST, then — on 401/403 — RFC 9728 protected-resource-metadata discovery.
  */
 
+import { LATEST_PROTOCOL_VERSION } from "@modelcontextprotocol/sdk/types.js";
+
 export type ProbeResult =
   | "none" // answered without auth
   | "oauth" // 401 + OAuth discovery metadata present → speaks the MCP OAuth flow
@@ -40,7 +42,7 @@ export async function probeAuth(serverUrl: string, fetchFn: typeof fetch = fetch
         id: 1,
         method: "initialize",
         params: {
-          protocolVersion: "2025-06-18",
+          protocolVersion: LATEST_PROTOCOL_VERSION,
           capabilities: {},
           clientInfo: { name: "mcp-switchboard-probe", version: "1.0.0" },
         },
