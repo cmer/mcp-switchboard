@@ -12,8 +12,9 @@ RUN npm run build
 FROM node:22-slim
 WORKDIR /app
 ENV NODE_ENV=production
-# npx/uvx for stdio MCP servers that are fetched on demand (uvx needs python)
-RUN apt-get update && apt-get install -y --no-install-recommends python3 pipx && rm -rf /var/lib/apt/lists/* \
+# npx/uvx for stdio MCP servers that are fetched on demand (uvx needs python;
+# git + ca-certificates are needed for `git+https://…` package specs)
+RUN apt-get update && apt-get install -y --no-install-recommends python3 pipx git ca-certificates && rm -rf /var/lib/apt/lists/* \
   && pipx install uv || true
 COPY package.json package-lock.json ./
 COPY server/package.json server/

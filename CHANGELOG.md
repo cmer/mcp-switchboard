@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **`git` in the Docker image.** stdio MCP servers installed from a `git+https://…` spec (e.g. via
+  `pipx run` / `uvx`) failed with `Cannot find command 'git'` because the runtime image only had
+  python and pipx. `git` and `ca-certificates` are now installed alongside them.
+
 ## [1.4.0] — 2026-08-13
 
 ### Added
