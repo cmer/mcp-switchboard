@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.4.1] — 2026-08-14
+
 ### Fixed
 
 - **`git` in the Docker image.** stdio MCP servers installed from a `git+https://…` spec (e.g. via
@@ -180,7 +182,8 @@ Initial release.
 - **Built-in `switchboard__list_servers` meta-tool.**
 - Docker image and GitHub Actions CI (build + test, plus a Docker build and smoke test).
 
-[Unreleased]: https://github.com/cmer/mcp-switchboard/compare/v1.4.0...HEAD
+[Unreleased]: https://github.com/cmer/mcp-switchboard/compare/v1.4.1...HEAD
+[1.4.1]: https://github.com/cmer/mcp-switchboard/compare/v1.4.0...v1.4.1
 [1.4.0]: https://github.com/cmer/mcp-switchboard/compare/v1.3.0...v1.4.0
 [1.3.0]: https://github.com/cmer/mcp-switchboard/compare/v1.2.0...v1.3.0
 [1.2.0]: https://github.com/cmer/mcp-switchboard/compare/v1.1.0...v1.2.0
