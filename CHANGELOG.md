@@ -59,6 +59,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Idle agent sessions are less likely to be dropped by a reverse proxy.** The MCP SDK was updated
+  to 1.30.0, whose Streamable HTTP server transport now emits SSE keep-alive comment frames (and
+  fixes the keep-alive timer's lifecycle) — an agent that sits idle between tool calls no longer
+  looks like a dead connection to an intermediary that times out silent streams, which showed up as
+  a session vanishing mid-conversation. The same bump tightens `Content-Type` validation to parse
+  the media type instead of substring-matching it, and bounds the read buffer for stdio servers that
+  emit very large responses.
+
 - **Request logs no longer attribute `switchboard__*` meta-tool calls to a phantom "switchboard"
   server.** Management and request meta-tools were logged with `switchboard` as their upstream
   server — a server that doesn't exist — polluting the Logs page's server filter. They now log with

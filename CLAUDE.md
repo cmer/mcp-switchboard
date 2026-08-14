@@ -4,7 +4,15 @@ Single-user homelab MCP switchboard (npm: `@cmer/mcp-switchboard`): configure MC
 
 ## Layout
 
-- `server/` — Node 20+ TypeScript, Hono, `@modelcontextprotocol/sdk` **v1.x** (do NOT upgrade to v2 beta), better-sqlite3 + Drizzle, ESM (`.js` import suffixes required).
+- `server/` — Node 20+ TypeScript, Hono, `@modelcontextprotocol/sdk` **v1.x** (do NOT upgrade to v2 before 2026-10-12), better-sqlite3 + Drizzle, ESM (`.js` import suffixes required).
+  - SDK v2.0.0 (the `@modelcontextprotocol/core` + `/client` + `/server` split) went GA 2026-07-27 and
+    is deliberately deferred — v1.x gets bug and security fixes for at least 6 months past that, and v2
+    speaks the same 2025-era protocol by default, so there is nothing to gain from being early. Revisit
+    after 2026-10-12, or sooner if an agent client needs the 2026-07-28 revision (`server/discover`),
+    which v1.x cannot serve. Migration notes: low-level `Server` and
+    `WebStandardStreamableHTTPServerTransport` both survive in v2, so the hub's shape ports over; the
+    manual work is `dbOAuthProvider.ts` / `tokenRefresher.ts` (auth is not covered by the codemod) and
+    v2's hard `zod@^4` dependency against our `zod@^3` REST validation.
 - `web/` — React 19 + Vite + Tailwind v4 + shadcn-style components, TanStack Query, react-router. Dev server proxies `/api`, `/oauth`, `/mcp` to `:8787`.
 - Runtime state (`switchboard.db`, `secret.key`) lives in `~/.config/mcp-switchboard` by default — see `server/src/config.ts` for the `DATA_DIR` > `XDG_CONFIG_HOME` > legacy-`./data` precedence. Never commit it.
 - `server/` is the published npm package `@cmer/mcp-switchboard` (root is a private workspace root). `scripts/prepack.mjs` bundles `web/dist` into `server/dist/web`; `npm run build` must run first.
