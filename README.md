@@ -71,7 +71,7 @@ npm run dev        # UI on http://localhost:5173, API/switchboard on :8787
 docker compose up -d --build   # switchboard on http://localhost:8787
 ```
 
-State persists in `./data` on the host. If you access the switchboard from another machine, set `PUBLIC_URL` (e.g. `PUBLIC_URL=http://192.168.1.10:8787 docker compose up -d`) so OAuth redirects work.
+State persists in `./data` on the host. If you access the switchboard from another machine, set `PUBLIC_URL` (e.g. `PUBLIC_URL=http://192.168.1.10:8787 docker compose up -d`) so links and redirects point at the right host — but note that OAuth providers reject a plain-HTTP redirect that is not loopback, so also read [OAuth over plain HTTP](#oauth-over-plain-http).
 
 ## Connecting an agent
 
@@ -115,6 +115,25 @@ Settings → General/Security covers the instance name, auto-enabling new server
 | `MCP_HOST` | `HOST` | Interface to bind the MCP listener to |
 
 Backup = copy the data directory (contains the database and the encryption key).
+
+### OAuth over plain HTTP
+
+OAuth 2.1 providers — Linear and most others — only accept a redirect URI that is `https` or a
+loopback address. A `PUBLIC_URL` like `http://nas.lan:8787` or `http://192.168.1.10:8787` therefore
+gets authorization refused before you ever see a consent screen. Two ways out:
+
+1. **Terminate TLS.** Caddy, a Cloudflare Tunnel, or `tailscale serve --bg 8787` all give you an
+   `https://` hostname with a real certificate. `PUBLIC_URL=https://…` then works with no further
+   ceremony, and your admin cookie and agent tokens stop crossing the network in the clear.
+2. **Open the UI through a loopback port-forward** (`ssh -L 8787:localhost:8787 nas`) and leave
+   `PUBLIC_URL` at its `http://localhost:8787` default. The callback comes back down the tunnel, so
+   authorization stays automatic. Agents still reach `/mcp/<slug>` over the LAN — set
+   `MCP_PUBLIC_URL` so the connection snippets show the address they should use.
+
+Changing `PUBLIC_URL` after a server has been authorized invalidates its registration with the
+provider, because the redirect URI it registered no longer exists. The switchboard notices and
+registers again on the next authorization, so the fix is to click **Authorize** on that server once
+more.
 
 ### Splitting the agent endpoint onto its own port
 
