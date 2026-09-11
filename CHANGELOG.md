@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **OAuth no longer breaks for good when `PUBLIC_URL` changes.** A dynamically registered OAuth
+  client is bound to the redirect URI it was registered with, so after `PUBLIC_URL` changed the
+  stored registration kept sending the old URI and providers rejected every attempt with
+  "Invalid redirect URI … does not match any registered URI for this client" (Linear's wording) —
+  with no way out from the UI. A registration whose redirect URI no longer matches is now discarded
+  and re-created on the next authorization, and a redirect-URI error explains that the provider
+  wants an https or loopback `PUBLIC_URL`.
+
 ## [1.4.2] — 2026-08-14
 
 ### Fixed

@@ -18,6 +18,16 @@ export interface DbOAuthProviderDeps {
 }
 
 /**
+ * True when a stored client registration is still usable with `redirectUrl`. Registrations that
+ * do not list any redirect URI (some servers omit the echo) are taken at face value.
+ */
+export function clientInfoMatchesRedirect(info: unknown, redirectUrl: string): boolean {
+  const uris = (info as { redirect_uris?: unknown } | null)?.redirect_uris;
+  if (!Array.isArray(uris) || uris.length === 0) return true;
+  return uris.includes(redirectUrl);
+}
+
+/**
  * OAuthClientProvider backed by the oauth_credentials table.
  *
  * `redirectToAuthorization` never opens a browser: it CAPTURES the URL in
@@ -80,7 +90,20 @@ export class DbOAuthProvider implements OAuthClientProvider {
   clientInformation(): OAuthClientInformationMixed | undefined {
     const row = this.row();
     if (!row?.clientInfoEnc) return undefined;
-    return JSON.parse(decrypt(row.clientInfoEnc)) as OAuthClientInformationMixed;
+    const info = JSON.parse(decrypt(row.clientInfoEnc)) as OAuthClientInformationMixed;
+    // A registration is bound to the redirect URI it was created with. If PUBLIC_URL changed
+    // since then, reusing this client_id makes the authorization server reject the authorize
+    // request ("redirect URI does not match any registered URI"), and no amount of re-auth
+    // clears it. Drop the stale registration so the SDK registers a fresh client instead.
+    if (!clientInfoMatchesRedirect(info, this.redirectUrl)) {
+      console.warn(
+        `[oauth] server ${this.serverId}: stored client registration was issued for a different ` +
+          `redirect URI than ${this.redirectUrl} — discarding it and re-registering.`,
+      );
+      this.invalidateCredentials("all");
+      return undefined;
+    }
+    return info;
   }
 
   saveClientInformation(info: OAuthClientInformationMixed): void {
