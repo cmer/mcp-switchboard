@@ -4,18 +4,8 @@ import { toast } from "sonner";
 import { api } from "@/lib/api";
 import { useApiMutation, useServerRequests } from "@/lib/hooks";
 import type { ServerRequest } from "@/lib/types";
-import { cn } from "@/lib/utils";
+import { cn, timeAgo } from "@/lib/utils";
 import { Badge, Button, Input } from "@/components/ui";
-
-function timeAgo(ts: number): string {
-  const secs = Math.max(0, Math.round((Date.now() - ts) / 1000));
-  if (secs < 60) return "just now";
-  const mins = Math.round(secs / 60);
-  if (mins < 60) return `${mins} min ago`;
-  const hours = Math.round(mins / 60);
-  if (hours < 24) return `${hours} h ago`;
-  return new Date(ts).toLocaleDateString(undefined, { month: "short", day: "numeric" });
-}
 
 /** One-line description of what the request would create. */
 function configSummary(req: ServerRequest): string {
