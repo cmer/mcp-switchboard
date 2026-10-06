@@ -95,6 +95,12 @@ export const config = {
   publicUrl,
   /** Base URL agents reach `/mcp/<slug>` at; null when it is the same origin as the UI. */
   mcpPublicUrl: resolveMcpPublicUrl(),
+  /**
+   * Origin the agent-facing OAuth metadata advertises. Only an explicit MCP_PUBLIC_URL counts: the
+   * derived fallbacks above point at the LAN, while OAuth clients reach us through a public HTTPS
+   * hostname — so when unset, the origin is taken from each request instead.
+   */
+  oauthPublicUrl: process.env.MCP_PUBLIC_URL ? process.env.MCP_PUBLIC_URL.replace(/\/$/, "") : null,
   /** Directory containing the built web UI (production). */
   webDist: resolveWebDist(),
 };

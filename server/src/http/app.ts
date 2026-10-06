@@ -6,7 +6,9 @@ import { auth } from "@modelcontextprotocol/sdk/client/auth.js";
 import { oauthCredentials, servers } from "../db/schema.js";
 import { adminAuthMiddleware } from "./adminAuth.js";
 import type { AppContext } from "./context.js";
-import { mcpEndpointHandler } from "./mcpEndpoint.js";
+import { config } from "../config.js";
+import { agentOAuthRoutes } from "./agentOAuthRoutes.js";
+import { mcpCors, mcpEndpointHandler } from "./mcpEndpoint.js";
 import { agentRoutes } from "./routes/agents.js";
 import { authRoutes, isAuthDisabled } from "./routes/auth.js";
 import { logRoutes } from "./routes/logs.js";
@@ -31,19 +33,38 @@ const MIME: Record<string, string> = {
  */
 export function createMcpApp(ctx: AppContext): Hono {
   const app = new Hono();
-  app.all("/mcp/:agentSlug", mcpEndpointHandler(ctx));
+  mountMcp(app, ctx);
   app.all("*", (c) => c.json({ error: "Not found — this port only serves /mcp/<agent-slug>" }, 404));
   return app;
+}
+
+/**
+ * The agent endpoint plus the OAuth authorization server that guards it. They travel together: an
+ * OAuth client discovers the server from the endpoint's 401 and calls its token endpoint from the
+ * same network position, so wherever /mcp is reachable, these must be too.
+ */
+function mountMcp(app: Hono, ctx: AppContext): void {
+  app.route(
+    "/",
+    agentOAuthRoutes({
+      db: ctx.db,
+      store: ctx.agentOAuth,
+      publicUrl: config.oauthPublicUrl,
+      onGrantRevoked: (agentId) => void ctx.hub.dropAgentSessions(agentId),
+    }),
+  );
+  app.use("/mcp/*", mcpCors);
+  app.all("/mcp/:agentSlug", mcpEndpointHandler(ctx));
 }
 
 export function createApp(ctx: AppContext, webDist: string, opts: { serveMcp?: boolean } = {}): Hono {
   const app = new Hono();
 
-  // --- Agent-facing MCP endpoint (bearer auth, NOT admin-cookie auth) ---
+  // --- Agent-facing MCP endpoint + its OAuth server (bearer/OAuth auth, NOT admin-cookie auth) ---
   // Skipped when MCP_PORT moved it to its own listener: serving it here too would defeat the
   // point of separating the two ports.
   if (opts.serveMcp !== false) {
-    app.all("/mcp/:agentSlug", mcpEndpointHandler(ctx));
+    mountMcp(app, ctx);
   } else {
     app.all("/mcp/*", (c) => c.json({ error: "The MCP endpoint is served on MCP_PORT" }, 404));
   }

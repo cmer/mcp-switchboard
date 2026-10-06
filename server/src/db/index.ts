@@ -98,6 +98,45 @@ CREATE TABLE IF NOT EXISTS server_requests (
   created_at INTEGER NOT NULL,
   resolved_at INTEGER
 );
+CREATE TABLE IF NOT EXISTS agent_oauth_clients (
+  client_id TEXT PRIMARY KEY,
+  client_secret_hash TEXT,
+  client_name TEXT,
+  redirect_uris_json TEXT NOT NULL,
+  token_endpoint_auth_method TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  authorized_at INTEGER
+);
+CREATE TABLE IF NOT EXISTS agent_oauth_codes (
+  code_hash TEXT PRIMARY KEY,
+  client_id TEXT NOT NULL REFERENCES agent_oauth_clients(client_id) ON DELETE CASCADE,
+  agent_id INTEGER NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
+  redirect_uri TEXT NOT NULL,
+  code_challenge TEXT NOT NULL,
+  scope TEXT,
+  resource TEXT,
+  expires_at INTEGER NOT NULL,
+  used_at INTEGER,
+  grant_id INTEGER
+);
+CREATE TABLE IF NOT EXISTS agent_oauth_grants (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  client_id TEXT NOT NULL REFERENCES agent_oauth_clients(client_id) ON DELETE CASCADE,
+  agent_id INTEGER NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
+  scope TEXT,
+  resource TEXT,
+  last_response_enc TEXT,
+  created_at INTEGER NOT NULL,
+  last_used_at INTEGER
+);
+CREATE TABLE IF NOT EXISTS agent_oauth_tokens (
+  token_hash TEXT PRIMARY KEY,
+  grant_id INTEGER NOT NULL REFERENCES agent_oauth_grants(id) ON DELETE CASCADE,
+  kind TEXT NOT NULL,
+  expires_at INTEGER NOT NULL,
+  rotated_at INTEGER
+);
+CREATE INDEX IF NOT EXISTS agent_oauth_tokens_grant ON agent_oauth_tokens(grant_id);
 `;
 
 export function initDb(dataDir: string): Db {

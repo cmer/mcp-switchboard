@@ -4,6 +4,7 @@ import type { RequestLogger } from "../core/requestLogger.js";
 import type { SwitchboardHub } from "../core/switchboardHub.js";
 import type { TokenRefresher } from "../core/tokenRefresher.js";
 import type { UpstreamManager } from "../core/upstreamManager.js";
+import type { AgentOAuthStore } from "../oauth/agentOAuth.js";
 import type { DbOAuthProvider } from "../oauth/dbOAuthProvider.js";
 import type { AdminSessionStore } from "./adminAuth.js";
 
@@ -14,6 +15,8 @@ export interface AppContext {
   logger: RequestLogger;
   refresher: TokenRefresher;
   adminSessions: AdminSessionStore;
+  /** Tokens for clients that reach /mcp/<slug> over OAuth instead of a static bearer token. */
+  agentOAuth: AgentOAuthStore;
   makeOAuthProvider: (serverId: number) => DbOAuthProvider;
   version: string;
 }

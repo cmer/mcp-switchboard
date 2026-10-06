@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import { z } from "zod";
-import { eq } from "drizzle-orm";
-import { agentServers, agents, servers, type AgentRow } from "../../db/schema.js";
+import { and, eq } from "drizzle-orm";
+import { agentOAuthClients, agentOAuthGrants, agentServers, agents, servers, type AgentRow } from "../../db/schema.js";
 import { decrypt, encrypt, randomToken } from "../../lib/crypto.js";
 import { isValidSlug, slugify } from "../../lib/slug.js";
 import { setMatrix } from "../../core/adminActions.js";
@@ -39,7 +39,35 @@ function serialize(ctx: AppContext, row: AgentRow) {
     createdAt: row.createdAt,
     sessions: ctx.hub.sessionCount(row.id),
     servers: allServers.map((s) => ({ serverId: s.id, enabled: enabledMap.get(s.id) ?? false })),
+    oauthGrants: oauthGrants(ctx, row.id),
   };
+}
+
+function redirectHost(redirectUrisJson: string): string | null {
+  try {
+    const first = (JSON.parse(redirectUrisJson) as string[])[0];
+    if (!first) return null;
+    const url = new URL(first);
+    return url.host || url.protocol; // custom-scheme redirects (cursor://…) may have no host
+  } catch {
+    return null;
+  }
+}
+
+function oauthGrants(ctx: AppContext, agentId: number) {
+  return ctx.db
+    .select({
+      id: agentOAuthGrants.id,
+      clientName: agentOAuthClients.clientName,
+      redirectUrisJson: agentOAuthClients.redirectUrisJson,
+      createdAt: agentOAuthGrants.createdAt,
+      lastUsedAt: agentOAuthGrants.lastUsedAt,
+    })
+    .from(agentOAuthGrants)
+    .innerJoin(agentOAuthClients, eq(agentOAuthClients.clientId, agentOAuthGrants.clientId))
+    .where(eq(agentOAuthGrants.agentId, agentId))
+    .all()
+    .map(({ redirectUrisJson, ...g }) => ({ ...g, redirectHost: redirectHost(redirectUrisJson) }));
 }
 
 export function agentRoutes(ctx: AppContext): Hono {
@@ -103,7 +131,8 @@ export function agentRoutes(ctx: AppContext): Hono {
     const id = Number(c.req.param("id"));
     const row = ctx.db.select().from(agents).where(eq(agents.id, id)).get();
     if (!row) return c.json({ error: "Not found" }, 404);
-    // Old token dies immediately: live sessions are dropped and the stored token replaced.
+    // Old token dies immediately: live sessions are dropped and the stored token replaced. OAuth
+    // grants are separate credentials (approved with pairing codes) and are revoked on their own.
     await ctx.hub.dropAgentSessions(id);
     const updated = ctx.db
       .update(agents)
@@ -112,6 +141,27 @@ export function agentRoutes(ctx: AppContext): Hono {
       .returning()
       .get();
     return c.json(serialize(ctx, updated));
+  });
+
+  // One-time code the admin types on the OAuth consent page to approve a connection for this agent.
+  app.post("/:id/oauth-pairing-code", (c) => {
+    const id = Number(c.req.param("id"));
+    if (!ctx.db.select().from(agents).where(eq(agents.id, id)).get()) return c.json({ error: "Not found" }, 404);
+    return c.json(ctx.agentOAuth.createPairingCode(id));
+  });
+
+  // Requests re-authenticate one by one, but an open SSE stream doesn't — so drop the sessions too.
+  app.delete("/:id/oauth-grants/:grantId", async (c) => {
+    const agentId = Number(c.req.param("id"));
+    const grantId = Number(c.req.param("grantId"));
+    const deleted = ctx.db
+      .delete(agentOAuthGrants)
+      .where(and(eq(agentOAuthGrants.id, grantId), eq(agentOAuthGrants.agentId, agentId)))
+      .returning()
+      .get();
+    if (!deleted) return c.json({ error: "Not found" }, 404);
+    await ctx.hub.dropAgentSessions(agentId);
+    return c.json({ ok: true });
   });
 
   app.put("/:id/servers/:serverId", async (c) => {
