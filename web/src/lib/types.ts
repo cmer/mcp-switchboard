@@ -44,6 +44,17 @@ export interface AgentInfo {
   createdAt: number;
   sessions: number;
   servers: { serverId: number; enabled: boolean }[];
+  oauthGrants: OAuthGrant[];
+}
+
+/** A client (e.g. a Claude Desktop connector) approved to reach this agent over OAuth. */
+export interface OAuthGrant {
+  id: number;
+  clientName: string | null;
+  /** Host the client's redirect URI points at — the closest thing to a verified identity. */
+  redirectHost: string | null;
+  createdAt: number;
+  lastUsedAt: number | null;
 }
 
 /** The server an agent proposes; mirrors the parsed config, minus secret values. */

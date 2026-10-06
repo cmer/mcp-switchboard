@@ -22,7 +22,11 @@ export default defineConfig({
     port: Number(process.env.WEB_PORT ?? 5173),
     proxy: {
       "/api": API_TARGET,
-      "/oauth": API_TARGET,
+      // The upstream-OAuth callback belongs to the admin app; the rest of /oauth is the agent-facing
+      // authorization server, which lives beside /mcp. First matching key wins.
+      "/oauth/callback": API_TARGET,
+      "/oauth": MCP_TARGET,
+      "/.well-known": MCP_TARGET,
       "/mcp": MCP_TARGET,
     },
   },

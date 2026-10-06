@@ -9,6 +9,7 @@ import { RequestLogger } from "./core/requestLogger.js";
 import { SwitchboardHub } from "./core/switchboardHub.js";
 import { TokenRefresher } from "./core/tokenRefresher.js";
 import { UpstreamManager } from "./core/upstreamManager.js";
+import { AgentOAuthStore } from "./oauth/agentOAuth.js";
 import { DbOAuthProvider } from "./oauth/dbOAuthProvider.js";
 import { AdminSessionStore } from "./http/adminAuth.js";
 import { createApp, createMcpApp } from "./http/app.js";
@@ -65,6 +66,7 @@ async function main(): Promise<void> {
     logger,
     refresher,
     adminSessions: new AdminSessionStore(db),
+    agentOAuth: new AgentOAuthStore(db),
     makeOAuthProvider,
     version: VERSION,
   };
@@ -76,6 +78,7 @@ async function main(): Promise<void> {
   refresher.scheduleAll();
   hub.startGc();
   logger.startGc();
+  ctx.agentOAuth.prune();
 
   // overrideGlobalObjects: hono's lightweight Response subclass breaks
   // `instanceof Response` checks in the MCP SDK's OAuth error parsing.

@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **OAuth for agents — connect Claude Desktop and claude.ai.** Custom connectors in Claude Desktop
+  and claude.ai can't send a static `Authorization` header, so they couldn't reach
+  `/mcp/<agent-slug>` at all. The switchboard is now its own OAuth 2.1 authorization server for its
+  agent endpoints (protected-resource and authorization-server metadata, dynamic client
+  registration, PKCE, refresh-token rotation): paste the agent's endpoint URL into **Add custom
+  connector** and approve the connection with a one-time **pairing code** generated on the Agents
+  page. Pairing codes keep the agent's long-lived token off a web page anyone can link to. Approved
+  clients are listed per agent under **OAuth connections** and can be revoked; static bearer tokens
+  keep working unchanged. The endpoint must be reachable over public HTTPS, since Claude's
+  connectors connect from Anthropic's cloud.
+- **CORS on `/mcp/<agent-slug>`**, so browser-based clients such as MCP Inspector can read the
+  session id and the OAuth challenge.
+
 ## [1.4.3] — 2026-09-11
 
 ### Fixed

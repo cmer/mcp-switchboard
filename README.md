@@ -83,6 +83,31 @@ claude mcp add switchboard --transport http \
   --header "Authorization: Bearer <agent-token>"
 ```
 
+### Claude Desktop, claude.ai and other OAuth-only clients
+
+Clients that can't send a custom header — Claude Desktop and claude.ai custom connectors, for
+instance — connect over OAuth instead. The switchboard is its own authorization server, so there is
+nothing to configure:
+
+1. Make `/mcp/<agent-slug>` reachable over **public HTTPS** (Caddy, Cloudflare Tunnel,
+   `tailscale funnel`). Claude's connectors connect from Anthropic's cloud, not from your machine.
+2. In Claude: **Settings → Connectors → Add custom connector**, paste
+   `https://<public-host>/mcp/<agent-slug>`, and leave the OAuth client ID and secret empty.
+3. Claude opens an approval page served by the switchboard. On the Agents page, open the agent's
+   **Connection instructions → Claude Desktop**, click **Generate pairing code**, type the code
+   into the approval page and click **Approve**.
+
+Pairing codes are single-use and expire after 10 minutes, so the agent's long-lived token never
+has to be pasted into a web page. The approved client shows up under the agent's **OAuth
+connections**, where it can be revoked. Access tokens last an hour and are refreshed automatically;
+an unused connection lapses after 90 days. Static bearer tokens keep working alongside OAuth.
+
+The authorization server lives next to `/mcp` (on `MCP_PORT` when the ports are split), because
+Claude calls its token endpoint from the same place it calls the MCP endpoint. Its metadata
+advertises URLs built from the incoming request (honouring `X-Forwarded-Proto` /
+`X-Forwarded-Host`); if your proxy rewrites the `Host` header, set `MCP_PUBLIC_URL` to the public
+`https://` origin instead.
+
 ## Lean mode
 
 By default an agent's `tools/list` proxies every tool of every server enabled for it, full JSON
@@ -110,7 +135,7 @@ Settings → General/Security covers the instance name, auto-enabling new server
 | `DATA_DIR` | `~/.config/mcp-switchboard` | SQLite DB + encryption key (respects `XDG_CONFIG_HOME`; the Docker image sets this to `/app/data`) |
 | `PUBLIC_URL` | `http://localhost:8787` | Base URL for OAuth redirect URIs — set to the LAN URL you open in your browser |
 | `MCP_PORT` | same as `PORT` | Serve the agent endpoint on its own port (see below) |
-| `MCP_PUBLIC_URL` | `PUBLIC_URL` with `MCP_PORT` | Base URL agents use for `/mcp/<slug>`, shown in the connection snippets |
+| `MCP_PUBLIC_URL` | `PUBLIC_URL` with `MCP_PORT` | Base URL agents use for `/mcp/<slug>`, shown in the connection snippets; when set explicitly, also the origin the agent OAuth metadata advertises |
 | `HOST` | all interfaces | Interface to bind the UI/API listener to |
 | `MCP_HOST` | `HOST` | Interface to bind the MCP listener to |
 

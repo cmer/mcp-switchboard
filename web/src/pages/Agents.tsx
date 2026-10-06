@@ -1,10 +1,10 @@
-import { useMemo, useState } from "react";
+import { useMemo, useState, type ReactNode } from "react";
 import { ChevronDown, ChevronUp, Plus } from "lucide-react";
 import { toast } from "sonner";
 import { api } from "@/lib/api";
 import { useAgents, useApiMutation, useAuthMe, useServers } from "@/lib/hooks";
-import type { AgentInfo, AgentRole, ServerInfo, ToolMode } from "@/lib/types";
-import { cn } from "@/lib/utils";
+import type { AgentInfo, AgentRole, OAuthGrant, ServerInfo, ToolMode } from "@/lib/types";
+import { cn, timeAgo } from "@/lib/utils";
 import { PageBar } from "@/components/Layout";
 import { StatusDot, statusInfo } from "@/components/StatusDot";
 import { Badge, Button, CopyButton, Dialog, Field, Input, Switch, Tabs } from "@/components/ui";
@@ -21,14 +21,54 @@ function useEndpointUrl(): (slug: string) => string {
 
 /* ---------- connect dialog ---------- */
 
+/** One-time code for the OAuth consent page — the long-lived agent token never leaves this UI. */
+function PairingCode({ agent }: { agent: AgentInfo }) {
+  const [pairing, setPairing] = useState<{ code: string; expiresAt: number } | null>(null);
+  const generate = useApiMutation(
+    () => api<{ code: string; expiresAt: number }>(`/api/agents/${agent.id}/oauth-pairing-code`, { method: "POST" }),
+    [],
+    (result) => setPairing(result),
+  );
+  const expiresAt = pairing ? new Date(pairing.expiresAt).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" }) : null;
+
+  return (
+    <div className="mt-3 flex items-center gap-3 rounded-[10px] border border-border-soft bg-panel-2/40 px-3 py-2.5">
+      {pairing ? (
+        <>
+          <code className="font-mono text-base font-semibold tracking-[0.12em]">{pairing.code}</code>
+          <span className="min-w-0 flex-1 text-xs text-faint">single use · expires at {expiresAt}</span>
+          <CopyButton text={pairing.code} />
+        </>
+      ) : (
+        <span className="min-w-0 flex-1 text-xs text-faint">Pairing codes work once and expire after 10 minutes.</span>
+      )}
+      <Button size="sm" disabled={generate.isPending} onClick={() => generate.mutate(undefined)}>
+        {pairing ? "New code" : "Generate pairing code"}
+      </Button>
+    </div>
+  );
+}
+
 function ConnectDialog({ agent, open, onClose }: { agent: AgentInfo; open: boolean; onClose: () => void }) {
-  const [tab, setTab] = useState<"claude" | "codex" | "ohmypi" | "json">("claude");
+  const [tab, setTab] = useState<"claude" | "desktop" | "codex" | "ohmypi" | "json">("claude");
   const url = useEndpointUrl()(agent.slug);
 
-  const snippets: Record<typeof tab, { caption: string; text: string }> = {
+  const snippets: Record<typeof tab, { caption: string; text: string; note?: ReactNode; extra?: ReactNode }> = {
     claude: {
       caption: "One-liner",
       text: `claude mcp add switchboard --transport http \\\n  ${url} \\\n  --header "Authorization: Bearer ${agent.token}"`,
+    },
+    desktop: {
+      caption: "Connector URL",
+      text: url,
+      note: (
+        <>
+          In Claude Desktop or claude.ai: <b>Settings → Connectors → Add custom connector</b>, paste this URL and leave
+          the OAuth client ID and secret empty. When the switchboard's approval page opens, enter a pairing code from
+          below. Claude connects from Anthropic's cloud, so this URL must be your public HTTPS address.
+        </>
+      ),
+      extra: <PairingCode agent={agent} />,
     },
     codex: {
       caption: "config.toml",
@@ -52,6 +92,7 @@ function ConnectDialog({ agent, open, onClose }: { agent: AgentInfo; open: boole
         onChange={setTab}
         options={[
           { value: "claude", label: "Claude Code" },
+          { value: "desktop", label: "Claude Desktop" },
           { value: "codex", label: "Codex" },
           { value: "ohmypi", label: "Oh My Pi" },
           { value: "json", label: "Raw JSON" },
@@ -65,12 +106,62 @@ function ConnectDialog({ agent, open, onClose }: { agent: AgentInfo; open: boole
         <pre className="overflow-x-auto rounded-[10px] border border-border-soft bg-code-bg px-3.5 py-3 font-mono text-xs leading-relaxed">
           {current.text}
         </pre>
+        {current.note && <p className="mt-3 text-xs leading-relaxed text-muted-fg">{current.note}</p>}
+        {current.extra}
         <p className="mt-3 text-xs text-faint">
           Tools arrive namespaced: <code className="font-mono">github__create_issue</code>,{" "}
           <code className="font-mono">postgres__query</code>, …
         </p>
       </div>
     </Dialog>
+  );
+}
+
+/* ---------- OAuth connections ---------- */
+
+function OAuthGrantRow({ agent, grant }: { agent: AgentInfo; grant: OAuthGrant }) {
+  const revoke = useApiMutation(
+    () => api(`/api/agents/${agent.id}/oauth-grants/${grant.id}`, { method: "DELETE" }),
+    ["agents"],
+    () => toast.success("Connection revoked — its tokens no longer work"),
+  );
+  return (
+    <div className="flex items-center gap-2.5 border-b border-border-soft bg-panel px-3 py-2 last:border-0">
+      <span className="min-w-0 flex-1 truncate text-xs">
+        <span className="font-medium">{grant.clientName || "Unnamed client"}</span>
+        {grant.redirectHost && <span className="ml-1.5 font-mono text-[11px] text-faint">via {grant.redirectHost}</span>}
+      </span>
+      <span className="text-[11px] text-faint">
+        {grant.lastUsedAt ? `used ${timeAgo(grant.lastUsedAt)}` : `approved ${timeAgo(grant.createdAt)}`}
+      </span>
+      <Button
+        size="sm"
+        variant="ghost"
+        className="text-err"
+        disabled={revoke.isPending}
+        onClick={() => {
+          if (confirm(`Revoke "${grant.clientName || "Unnamed client"}"? It will have to be approved again.`)) revoke.mutate(undefined);
+        }}
+      >
+        Revoke
+      </Button>
+    </div>
+  );
+}
+
+function OAuthGrants({ agent }: { agent: AgentInfo }) {
+  return (
+    <div className="mb-4">
+      <div className="mb-2 flex items-baseline justify-between">
+        <span className="text-xs font-semibold">OAuth connections</span>
+        <span className="text-[11px] text-faint">clients approved with a pairing code</span>
+      </div>
+      <div className="overflow-hidden rounded-[10px] border border-border-soft">
+        {agent.oauthGrants.map((grant) => (
+          <OAuthGrantRow key={grant.id} agent={agent} grant={grant} />
+        ))}
+      </div>
+    </div>
   );
 }
 
@@ -231,6 +322,8 @@ function AgentCard({ agent, servers }: { agent: AgentInfo; servers: ServerInfo[]
               </div>
             </div>
           </div>
+
+          {agent.oauthGrants.length > 0 && <OAuthGrants agent={agent} />}
 
           <div className="mb-2 flex items-baseline justify-between">
             <span className="text-xs font-semibold">Servers for this agent</span>

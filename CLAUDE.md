@@ -41,6 +41,7 @@ internal test churn). On release, rename `[Unreleased]` to the new version with 
 - Agent-facing sessions are in-memory only; unknown session id → HTTP 404 (client re-initializes).
 - Secrets (env vars, bearer tokens, OAuth tokens) are AES-256-GCM encrypted at rest via `server/src/lib/crypto.ts`; REST responses never include decrypted secrets except agent tokens (needed by the UI for connection snippets).
 - OAuth: `DbOAuthProvider.redirectToAuthorization` only captures the URL (never auto-opens); `TokenRefresher` proactively renews at 80% of token lifetime — auth must never go stale.
+- Agent-facing OAuth (`server/src/oauth/agentOAuth.ts`, `server/src/http/agentOAuthRoutes.ts`): the switchboard is its own authorization server for `/mcp/<slug>`, mounted beside `/mcp` (on `MCP_PORT` when split — never on the admin listener alone). Consent is a one-time in-memory pairing code from the admin UI, never the admin password or the agent's static token. Agent OAuth tokens/secrets are stored as SHA-256 only. Every error from `/oauth/token` must be JSON `{error}`; unknown clients get 401 `invalid_client` (that's what makes clients re-register).
 - `list_changed` notifications fan out to affected live agent sessions on any matrix toggle / server change.
 - Lean mode (`agents.tool_mode = 'lean'`) exposes a constant-size meta-tool surface (search/describe/call); upstream tool schemas must never be added to a lean `tools/list`.
 
