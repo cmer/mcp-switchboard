@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Claude connectors behind chained proxies.** Behind Cloudflare → Caddy (or any proxy hop that
+  speaks plain HTTP), the agent OAuth metadata advertised `http://` URLs, because the inner proxy
+  reports its own scheme, and Claude refused to sign in. A `PUBLIC_URL` that is `https://` now
+  settles the scheme for requests to its own host, so the common one-hostname setup works without
+  also setting `MCP_PUBLIC_URL`.
+
+### Changed
+
+- **Clearer env var docs.** The README now splits the variables into the admin UI's and the agent
+  endpoint's, spells out which OAuth direction `PUBLIC_URL` and `MCP_PUBLIC_URL` each serve, lists
+  typical setups, and adds a *Behind a reverse proxy* section with a `curl` check for the metadata
+  Claude reads. The Claude connector steps now match the current dialog (full `/mcp/<slug>` URL,
+  dynamic registration, CIMD unsupported).
+
 ## [1.5.0] — 2026-10-07
 
 ### Added

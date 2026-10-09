@@ -50,6 +50,7 @@ function mountMcp(app: Hono, ctx: AppContext): void {
       db: ctx.db,
       store: ctx.agentOAuth,
       publicUrl: config.oauthPublicUrl,
+      uiPublicUrl: config.publicUrl,
       onGrantRevoked: (agentId) => void ctx.hub.dropAgentSessions(agentId),
     }),
   );

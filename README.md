@@ -87,12 +87,16 @@ claude mcp add switchboard --transport http \
 
 Clients that can't send a custom header — Claude Desktop and claude.ai custom connectors, for
 instance — connect over OAuth instead. The switchboard is its own authorization server, so there is
-nothing to configure:
+no OAuth app to register anywhere:
 
 1. Make `/mcp/<agent-slug>` reachable over **public HTTPS** (Caddy, Cloudflare Tunnel,
    `tailscale funnel`). Claude's connectors connect from Anthropic's cloud, not from your machine.
-2. In Claude: **Settings → Connectors → Add custom connector**, paste
-   `https://<public-host>/mcp/<agent-slug>`, and leave the OAuth client ID and secret empty.
+   Check that the switchboard advertises the same `https://` origin — see
+   [Behind a reverse proxy](#behind-a-reverse-proxy).
+2. In Claude: **Settings → Connectors → Add custom connector**, paste the full endpoint
+   `https://<public-host>/mcp/<agent-slug>` (the bare host 404s), then keep **Sign in now** and
+   **Register automatically** (dynamic client registration). "Claude's published identity" (CIMD)
+   is not supported.
 3. Claude opens an approval page served by the switchboard. On the Agents page, open the agent's
    **Connection instructions → Claude Desktop**, click **Generate pairing code**, type the code
    into the approval page and click **Approve**.
@@ -103,10 +107,7 @@ connections**, where it can be revoked. Access tokens last an hour and are refre
 an unused connection lapses after 90 days. Static bearer tokens keep working alongside OAuth.
 
 The authorization server lives next to `/mcp` (on `MCP_PORT` when the ports are split), because
-Claude calls its token endpoint from the same place it calls the MCP endpoint. Its metadata
-advertises URLs built from the incoming request (honouring `X-Forwarded-Proto` /
-`X-Forwarded-Host`); if your proxy rewrites the `Host` header, set `MCP_PUBLIC_URL` to the public
-`https://` origin instead.
+Claude calls its token endpoint from the same place it calls the MCP endpoint.
 
 ## Lean mode
 
@@ -129,15 +130,40 @@ Settings → General/Security covers the instance name, auto-enabling new server
 
 ![Settings — instance name, auto-enable, auth toggle, change password](docs/settings.png)
 
+Two groups of variables, one per audience. The `PUBLIC_*` pair is the easy one to mix up: the
+switchboard talks OAuth in two directions, and each direction has its own URL.
+
+- **Upstream OAuth** — the switchboard signing in *to* Linear, Xero, Stripe, … from your browser.
+  The provider redirects your browser back to `PUBLIC_URL`.
+- **Agent OAuth** — Claude Desktop / claude.ai signing in *to* the switchboard. Claude's cloud
+  reaches the agent endpoint, and the metadata it reads must name that endpoint's public origin
+  (`MCP_PUBLIC_URL`, or the request itself when unset).
+
+**The admin UI and upstream servers**
+
 | Env var | Default | Purpose |
 | --- | --- | --- |
-| `PORT` | `8787` | HTTP port |
+| `PORT` | `8787` | Port for the UI, REST API — and `/mcp/<slug>` unless `MCP_PORT` is set |
+| `HOST` | all interfaces | Interface the UI/API listener binds to |
+| `PUBLIC_URL` | `http://localhost:8787` | The URL **you open the UI at in your browser**. Upstream OAuth redirect URIs are built from it (`<PUBLIC_URL>/oauth/callback`). Not used by agents — with one exception: when it is `https://`, a request for that same host is known to be TLS even if a proxy hop says otherwise |
 | `DATA_DIR` | `~/.config/mcp-switchboard` | SQLite DB + encryption key (respects `XDG_CONFIG_HOME`; the Docker image sets this to `/app/data`) |
-| `PUBLIC_URL` | `http://localhost:8787` | Base URL for OAuth redirect URIs — set to the LAN URL you open in your browser |
-| `MCP_PORT` | same as `PORT` | Serve the agent endpoint on its own port (see below) |
-| `MCP_PUBLIC_URL` | `PUBLIC_URL` with `MCP_PORT` | Base URL agents use for `/mcp/<slug>`, shown in the connection snippets; when set explicitly, also the origin the agent OAuth metadata advertises |
-| `HOST` | all interfaces | Interface to bind the UI/API listener to |
-| `MCP_HOST` | `HOST` | Interface to bind the MCP listener to |
+
+**The agent endpoint (`/mcp/<slug>`)**
+
+| Env var | Default | Purpose |
+| --- | --- | --- |
+| `MCP_PORT` | unset (shares `PORT`) | Serve the agent endpoint on its own port — see [below](#splitting-the-agent-endpoint-onto-its-own-port) |
+| `MCP_HOST` | `HOST` | Interface the MCP listener binds to |
+| `MCP_PUBLIC_URL` | see right | The origin **agents use to reach `/mcp/<slug>`**, without the path. Two consumers: the connection snippets in the UI (unset → the UI's own origin, or `PUBLIC_URL` with the port swapped when `MCP_PORT` is set), and the agent OAuth metadata (unset → derived from each request; see [Behind a reverse proxy](#behind-a-reverse-proxy)). Set it whenever agents come in through a proxy or tunnel |
+
+Typical setups:
+
+| Setup | Set |
+| --- | --- |
+| Everything on localhost | nothing |
+| LAN only, plain HTTP | `PUBLIC_URL=http://192.168.1.10:8787` (and read [OAuth over plain HTTP](#oauth-over-plain-http)) |
+| One HTTPS hostname for UI and agents | `PUBLIC_URL=https://sb.example.com` — add `MCP_PUBLIC_URL` with the same value if the metadata check below fails |
+| UI on the LAN/tailnet, agents through a public tunnel | `PUBLIC_URL=<what you open in the browser>`, `MCP_PUBLIC_URL=https://<public-host>` |
 
 Backup = copy the data directory (contains the database and the encryption key).
 
@@ -159,6 +185,28 @@ Changing `PUBLIC_URL` after a server has been authorized invalidates its registr
 provider, because the redirect URI it registered no longer exists. The switchboard notices and
 registers again on the next authorization, so the fix is to click **Authorize** on that server once
 more.
+
+### Behind a reverse proxy
+
+When `MCP_PUBLIC_URL` is unset, the agent OAuth metadata is built from the incoming request,
+honouring `X-Forwarded-Proto` and `X-Forwarded-Host`. That works for a single proxy that terminates
+TLS. It breaks when:
+
+- **Proxies are chained over plain HTTP** — e.g. Cloudflare → Caddy, where Cloudflare talks HTTP to
+  Caddy. Caddy reports *its* hop as `X-Forwarded-Proto: http`, so the metadata advertises
+  `http://…` and Claude rejects it. An `https://` `PUBLIC_URL` for the same host fixes the scheme
+  automatically; otherwise set `MCP_PUBLIC_URL`, or have Caddy send
+  `header_up X-Forwarded-Proto https`.
+- **The proxy rewrites `Host`** and doesn't send `X-Forwarded-Host`.
+
+Check what Claude will see — the `resource` must be exactly the URL you paste into the connector:
+
+```bash
+curl -s https://<public-host>/.well-known/oauth-protected-resource/mcp/<agent-slug>
+# {"resource":"https://<public-host>/mcp/<agent-slug>","authorization_servers":["https://<public-host>"],…}
+```
+
+Anything `http://`, or a different host, means `MCP_PUBLIC_URL=https://<public-host>` is needed.
 
 ### Splitting the agent endpoint onto its own port
 

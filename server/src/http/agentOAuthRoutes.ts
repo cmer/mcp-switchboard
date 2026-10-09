@@ -24,6 +24,8 @@ export interface AgentOAuthDeps {
   store: AgentOAuthStore;
   /** Explicit public origin (MCP_PUBLIC_URL); null = derive from each request. */
   publicUrl: string | null;
+  /** PUBLIC_URL, consulted only to settle the scheme of a request for its host (see oauthBaseUrl). */
+  uiPublicUrl?: string;
   /** A grant was revoked: its open SSE streams outlive per-request auth, so drop the agent's sessions. */
   onGrantRevoked?: (agentId: number) => void;
 }
@@ -36,13 +38,26 @@ function firstHeader(req: Request, name: string): string | undefined {
 /**
  * Origin the client reached us at. Behind a tunnel the request arrives as plain HTTP for an internal
  * host, so the forwarded headers are what match the URL the user pasted into their client.
+ *
+ * Chained proxies can still get the scheme wrong: Cloudflare → Caddy over plain HTTP reaches us as
+ * `X-Forwarded-Proto: http`, because Caddy reports its own hop. An https PUBLIC_URL for the same host
+ * settles it — the admin already told us that host is served over TLS.
  */
-export function oauthBaseUrl(req: Request, publicUrl: string | null): string {
+export function oauthBaseUrl(req: Request, publicUrl: string | null, uiPublicUrl?: string): string {
   if (publicUrl) return publicUrl;
   const url = new URL(req.url);
   const proto = firstHeader(req, "x-forwarded-proto") ?? url.protocol.replace(/:$/, "");
   const host = firstHeader(req, "x-forwarded-host") ?? req.headers.get("host") ?? url.host;
+  if (uiPublicUrl?.startsWith("https://") && sameHost(uiPublicUrl, host)) return uiPublicUrl;
   return `${proto}://${host}`;
+}
+
+function sameHost(origin: string, host: string): boolean {
+  try {
+    return new URL(origin).host === new URL(`https://${host}`).host;
+  } catch {
+    return false;
+  }
 }
 
 export function resourceMetadataUrl(base: string, slug: string): string {
@@ -161,7 +176,7 @@ type AuthorizeCheck =
 export function agentOAuthRoutes(deps: AgentOAuthDeps): Hono {
   const { db, store } = deps;
   const app = new Hono();
-  const base = (c: Context) => oauthBaseUrl(c.req.raw, deps.publicUrl);
+  const base = (c: Context) => oauthBaseUrl(c.req.raw, deps.publicUrl, deps.uiPublicUrl);
 
   // Browser-based clients (MCP Inspector) call these cross-origin. No cookies are involved, so `*`.
   const publicCors = cors({ origin: "*", allowHeaders: ["Authorization", "Content-Type", "MCP-Protocol-Version"] });

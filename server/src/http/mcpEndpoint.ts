@@ -37,7 +37,7 @@ export function mcpEndpointHandler(ctx: AppContext) {
         timingSafeEqualStr(presented, decrypt(agent.tokenEnc)));
     if (!valid) {
       // The resource_metadata pointer is how OAuth clients find the authorization server (RFC 9728 §5.1).
-      const metadata = resourceMetadataUrl(oauthBaseUrl(c.req.raw, config.oauthPublicUrl), slug);
+      const metadata = resourceMetadataUrl(oauthBaseUrl(c.req.raw, config.oauthPublicUrl, config.publicUrl), slug);
       const challenge = presented
         ? `Bearer error="invalid_token", resource_metadata="${metadata}"`
         : `Bearer resource_metadata="${metadata}"`;

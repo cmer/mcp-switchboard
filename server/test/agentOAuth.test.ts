@@ -10,7 +10,7 @@ import { agentOAuthGrants, agents } from "../src/db/schema.js";
 import { encrypt, loadOrCreateKey } from "../src/lib/crypto.js";
 import { createMcpApp } from "../src/http/app.js";
 import { agentRoutes } from "../src/http/routes/agents.js";
-import { isAcceptableRedirectUri, redirectUriMatches, slugFromResource } from "../src/http/agentOAuthRoutes.js";
+import { isAcceptableRedirectUri, oauthBaseUrl, redirectUriMatches, slugFromResource } from "../src/http/agentOAuthRoutes.js";
 import type { AppContext } from "../src/http/context.js";
 import { ACCESS_TTL_MS, AgentOAuthStore, REFRESH_GRACE_MS } from "../src/oauth/agentOAuth.js";
 
@@ -158,6 +158,20 @@ describe("discovery", () => {
     const body = (await res.json()) as { resource: string; authorization_servers: string[] };
     expect(body.resource).toBe(MCP_URL);
     expect(body.authorization_servers).toEqual([BASE]);
+  });
+
+  it("trusts an https PUBLIC_URL over a proxy hop that reports http for the same host", () => {
+    // Cloudflare → Caddy over plain HTTP: Caddy forwards its own scheme, not the client's.
+    const viaCaddy = new Request("http://10.0.0.5:8787/.well-known/oauth-authorization-server", {
+      headers: { "X-Forwarded-Proto": "http", "X-Forwarded-Host": "sb.example.com" },
+    });
+    expect(oauthBaseUrl(viaCaddy, null, "https://sb.example.com")).toBe("https://sb.example.com");
+    // A different host (say, a tailnet name for the UI) says nothing about this one.
+    expect(oauthBaseUrl(viaCaddy, null, "https://nas.tail1234.ts.net")).toBe("http://sb.example.com");
+    // An http PUBLIC_URL is no evidence of TLS.
+    expect(oauthBaseUrl(viaCaddy, null, "http://sb.example.com")).toBe("http://sb.example.com");
+    // MCP_PUBLIC_URL still wins outright.
+    expect(oauthBaseUrl(viaCaddy, "https://mcp.example.com", "https://sb.example.com")).toBe("https://mcp.example.com");
   });
 
   it("404s the metadata of an agent that doesn't exist", async () => {
