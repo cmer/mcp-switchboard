@@ -1,7 +1,7 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport, getDefaultEnvironment } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
-import { SSEClientTransport } from "@modelcontextprotocol/sdk/client/sse.js";
+import { SSEClientTransport, SseError } from "@modelcontextprotocol/sdk/client/sse.js";
 import { auth, UnauthorizedError, type OAuthClientProvider } from "@modelcontextprotocol/sdk/client/auth.js";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import {
@@ -35,7 +35,18 @@ export interface UpstreamEvents {
   onStateChanged: (serverId: number, state: UpstreamState) => void;
   /** Build an OAuthClientProvider for a server (injected to avoid a core→oauth dependency). */
   makeOAuthProvider: (serverId: number) => OAuthClientProvider;
+  /**
+   * An `sse` server refused the legacy transport but connected over Streamable HTTP at the same
+   * URL — persist `type: "http"` so the config matches reality. Returns the updated row.
+   */
+  onLegacySseFallback?: (serverId: number) => ServerRow | undefined;
 }
+
+/**
+ * SSE GET statuses that mean "this URL doesn't speak legacy HTTP+SSE": 404/405 from Streamable-HTTP-only
+ * servers, 410 Gone from servers that retired SSE (Cloudflare's `*.mcp.cloudflare.com/sse`).
+ */
+const LEGACY_SSE_REJECTED = new Set([404, 405, 410]);
 
 const CALL_TIMEOUT_MS = 120_000;
 const BACKOFF_BASE_MS = 1_000;
@@ -124,9 +135,64 @@ export class UpstreamConnection {
     this.events.onStateChanged(this.serverId, state);
   }
 
-  private buildTransport(): Transport {
+  /**
+   * Connect a fresh Client. An `sse` server whose SSE stream is refused (see LEGACY_SSE_REJECTED) gets
+   * one retry over Streamable HTTP at the same URL — same URL so OAuth tokens stay bound to the same
+   * resource — and is switched to `http` once that works.
+   */
+  private async open(): Promise<{ client: Client; transport: Transport }> {
+    try {
+      return await this.openWith(this.row.type);
+    } catch (err) {
+      if (this.row.type !== "sse" || !(err instanceof SseError) || !LEGACY_SSE_REJECTED.has(err.code ?? 0)) {
+        throw err;
+      }
+      const sseMsg = `${err.message} — server refused the legacy SSE transport`;
+      this.stderrLog.push(`[switchboard] ${sseMsg}; retrying with Streamable HTTP at the same URL`);
+      let opened: { client: Client; transport: Transport };
+      try {
+        opened = await this.openWith("http");
+      } catch (httpErr) {
+        // Keep UnauthorizedError intact so the caller lands in needs_auth rather than backoff.
+        if (httpErr instanceof UnauthorizedError) throw httpErr;
+        const httpMsg = httpErr instanceof Error ? httpErr.message : String(httpErr);
+        throw new Error(
+          `${sseMsg}, and Streamable HTTP at the same URL also failed: ${httpMsg}\n` +
+            "→ Edit the server, set Transport to HTTP, and use the provider's Streamable HTTP URL " +
+            "(often the same URL ending in /mcp instead of /sse).",
+        );
+      }
+      const updated = this.events.onLegacySseFallback?.(this.serverId);
+      if (updated) this.row = updated;
+      this.stderrLog.push("[switchboard] connected over Streamable HTTP; transport switched from SSE to HTTP");
+      return opened;
+    }
+  }
+
+  private async openWith(type: ServerRow["type"]): Promise<{ client: Client; transport: Transport }> {
+    const transport = this.buildTransport(type);
+    const client = new Client({ name: "mcp-switchboard", version: "1.0.0" }, { capabilities: {} });
+    client.onclose = () => {
+      if (!this.stopped && this.client === client) {
+        this.lastError = this.lastError ?? "connection closed";
+        void this.scheduleReconnect();
+      }
+    };
+    client.onerror = (err) => {
+      this.lastError = err instanceof Error ? err.message : String(err);
+    };
+    try {
+      await client.connect(transport);
+    } catch (err) {
+      await client.close().catch(() => {});
+      throw err;
+    }
+    return { client, transport };
+  }
+
+  private buildTransport(type: ServerRow["type"] = this.row.type): Transport {
     const row = this.row;
-    if (row.type === "stdio") {
+    if (type === "stdio") {
       const args: string[] = row.argsJson ? JSON.parse(row.argsJson) : [];
       const userEnv: Record<string, string> = row.envJsonEnc ? JSON.parse(decrypt(row.envJsonEnc)) : {};
       const transport = new StdioClientTransport({
@@ -146,7 +212,7 @@ export class UpstreamConnection {
     const headers = this.buildHeaders();
     const authProvider = row.authType === "oauth" ? this.events.makeOAuthProvider(row.id) : undefined;
 
-    if (row.type === "http") {
+    if (type === "http") {
       return new StreamableHTTPClientTransport(url, {
         authProvider,
         requestInit: headers ? { headers } : undefined,
@@ -184,18 +250,7 @@ export class UpstreamConnection {
     this.connecting = true;
     this.setState("connecting");
     try {
-      const transport = this.buildTransport();
-      const client = new Client({ name: "mcp-switchboard", version: "1.0.0" }, { capabilities: {} });
-      client.onclose = () => {
-        if (!this.stopped && this.client === client) {
-          this.lastError = this.lastError ?? "connection closed";
-          void this.scheduleReconnect();
-        }
-      };
-      client.onerror = (err) => {
-        this.lastError = err instanceof Error ? err.message : String(err);
-      };
-      await client.connect(transport);
+      const { client, transport } = await this.open();
       this.client = client;
       this.transport = transport;
       this.lastError = null;

@@ -20,6 +20,11 @@ export class UpstreamManager {
       onCachesChanged: (id, kind) => this.onCachesChanged(id, kind),
       onStateChanged: (id, state) => this.onStateChanged(id, state),
       makeOAuthProvider: this.makeOAuthProvider,
+      onLegacySseFallback: (id) => {
+        this.db.update(servers).set({ type: "http", updatedAt: Date.now() }).where(eq(servers.id, id)).run();
+        // The connection adopts this row, so reconcile() sees a matching updatedAt and won't restart it.
+        return this.db.select().from(servers).where(eq(servers.id, id)).get();
+      },
     };
   }
 

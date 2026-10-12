@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **SSE servers that retired the legacy transport.** Cloudflare's MCP servers (and others moving
+  off HTTP+SSE) now answer the SSE stream with 410 Gone, which left the server stuck on
+  "Unreachable · Non-200 status code (410)" and gave no hint about the fix. When an SSE server
+  refuses the stream (404/405/410), the switchboard now retries Streamable HTTP at the same URL
+  and switches the server to HTTP once that connects. OAuth servers go to *Needs auth* as usual.
+  If HTTP fails too, the error says to change the transport and URL (usually `/sse` → `/mcp`).
+
 ## [1.5.1] — 2026-10-08
 
 ### Fixed
