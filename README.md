@@ -40,6 +40,13 @@ On first visit, set the password for the `admin` user. State lives in `~/.config
 `PUBLIC_URL` to the address you'll open it at; see [Configuration](docs/configuration.md) and
 [Reverse proxies and HTTPS](docs/reverse-proxy.md). From source: `npm install && npm run build && npm start`.
 
+**Setting up a dedicated VM?** Let Claude Code do it. On a fresh Debian or Ubuntu machine (locally or
+over SSH), it installs Docker and the switchboard, then can put it behind Cloudflare Access:
+
+```bash
+claude "Follow https://raw.githubusercontent.com/cmer/mcp-switchboard/main/.claude/skills/switchboard-install/SKILL.md"
+```
+
 ## Connecting an agent
 
 Create an agent in the UI and copy the connection snippet it shows. For Claude Code:

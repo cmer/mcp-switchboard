@@ -7,6 +7,28 @@ switchboard maps the verified email to a user. There are no switchboard password
 Agents are unaffected. They keep using their bearer tokens or agent OAuth, and the switchboard never
 looks at Access headers on the agent paths (`/mcp/*`, `/.well-known/*` and the agent OAuth endpoints).
 
+## Let Claude Code set it up
+
+The `switchboard-cloudflare-access` skill does all of this for you:
+
+1. reads how your switchboard is installed (Docker Compose or systemd, here or over SSH)
+2. asks only what it can't work out (one hostname or a separate one for agents, who may sign in,
+   whether to create a tunnel)
+3. shows the full plan and applies it once you confirm:
+   - on Cloudflare: the Access applications and policies, and optionally the tunnel and DNS records,
+     through Cloudflare's `cf` CLI
+   - on the switchboard: environment changes, user emails, and the switch to Access sign-in, rolled
+     back automatically if you can't get in
+
+With this repository open in Claude Code, ask it to "put my switchboard behind Cloudflare Access".
+Anywhere else, run it once without installing anything:
+
+```bash
+claude "Follow https://raw.githubusercontent.com/cmer/mcp-switchboard/main/.claude/skills/switchboard-cloudflare-access/SKILL.md"
+```
+
+The steps below are what it does, if you'd rather do them by hand.
+
 ## Before you start
 
 - The switchboard is reachable through a Cloudflare-proxied hostname (a Cloudflare Tunnel is the usual

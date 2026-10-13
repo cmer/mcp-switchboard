@@ -65,10 +65,15 @@ upgrading prints a line saying so.
   carries a valid Access token for the Admin's own email, so a typo can't lock everyone out. Agent
   paths never look at Access headers. See the new [Cloudflare Access guide](docs/cloudflare-access.md),
   including the Bypass application agents need.
-- **Command-line recovery.** `mcp-switchboard reset-password <username>` and
+- **Command-line recovery and setup.** `mcp-switchboard reset-password <username>` and
   `mcp-switchboard login-mode password` repair a lost password or a broken Access setup from the host,
   while the server is running or not. Before this, the binary only started the server and had no way
-  back in. See [Recovering access](docs/recovering-access.md) for the npx and Docker forms.
+  back in. `status` and `user list` (both with `--json`) show what state the install is in, `user email`
+  sets or clears a user's email, and `login-mode cloudflare --team-domain … --aud …` switches to
+  Cloudflare Access from the shell, so scripts and skills can set it up with values taken straight from
+  Cloudflare. It keeps the Settings guards (a password and an email on the Default user) but skips the
+  live-token check, which needs a browser. See [Recovering access](docs/recovering-access.md) and
+  [Command line](docs/configuration.md#command-line) for the npx and Docker forms.
 - **Per-user settings.** Auto-enable new servers, allow server requests and payload capture now belong
   to each user and apply to their own servers and agents only. They are in **Settings, Yours**;
   instance-wide settings are in **Settings, Instance** (Admin only).
@@ -76,6 +81,15 @@ upgrading prints a line saying so.
   with `sharedBy`. Manager agents can only list and manage their own owner's agents and servers, can
   switch on shares by alias but not accept or modify them, and see status and counts, never stderr, for
   a shared server.
+- **Claude Code skills for installing and exposing the switchboard.** `switchboard-install` sets up
+  a fresh Debian or Ubuntu VM (locally or over SSH): Docker, a release checkout, host networking so
+  local servers reach the LAN like the machine does, and a generated Admin password.
+  `switchboard-cloudflare-access` reads an existing install first, then sets up the Access applications,
+  policies, and optionally the tunnel and DNS with Cloudflare's `cf` CLI. It also updates the
+  switchboard's environment, sets user emails, and switches it to Access sign-in, rolling back if you
+  can't get in. Both show the full plan and change nothing until you confirm, because the Bypass rules
+  and env changes are easy to get subtly wrong by hand. Run them once from their GitHub URL; nothing
+  gets installed.
 - **Guides in `docs/`.** Configuration, reverse proxy and HTTPS, Claude Desktop, Cloudflare Access,
   recovering access and lean mode each have their own page.
 
