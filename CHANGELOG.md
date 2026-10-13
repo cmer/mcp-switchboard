@@ -7,6 +7,104 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+This is **2.0.0**: the switchboard becomes multi-user. Nothing about an existing install has to be redone, but the upgrade is one-way, so read "Upgrading from 1.x" first.
+
+### Upgrading from 1.x
+
+On first start, 2.0 copies `switchboard.db` to `switchboard.db.pre-multiuser` (in the same data
+directory) before it changes anything, then gives everything you already have to a new user named
+`admin`. Sign in as `admin` with the same password as before. Every agent URL and token keeps working,
+including OAuth connections made through Claude Desktop or claude.ai; the connection snippets now show
+the new form, `/mcp/admin/<agent>`, but `/mcp/<agent>` is still answered. To roll back, stop the
+switchboard, restore `switchboard.db.pre-multiuser` as `switchboard.db`, and reinstall 1.5.x. Anything
+you changed after upgrading is lost.
+
+If you had sign-in turned off, it is now always on: sign in as `admin` with your old password, or
+reset it with `mcp-switchboard reset-password admin` (Docker:
+`docker compose exec switchboard node dist/index.js reset-password admin`). The first start after
+upgrading prints a line saying so.
+
+### Added
+
+- **Users, and an Admin to manage them.** One household can now share one switchboard. The `admin`
+  user (the Default user: it owns everything from before the upgrade and can't be disabled or deleted)
+  is the Admin and gets a **Users** page to create, rename, disable and delete users and set their
+  emails. There is exactly one Admin; the only power that can be delegated is running local commands.
+- **Setup codes instead of shared passwords.** Creating a user, or resetting their password, produces a
+  one-time code (valid 24 hours). The person enters it under **I have a setup code** on the login page
+  and chooses their own password, so the Admin never knows anyone's password and there is nothing to
+  email around.
+- **Everything a user owns is private.** Servers, agents, the switch matrix, request logs, server
+  requests and settings belong to one user and are invisible to the others, including in the live log
+  stream. The Admin sees names and counts on the Users page, never contents. Isolation is enforced in a
+  single data-access layer with a test that fails if any route goes around it, because a missed check
+  in 70 scattered queries is how multi-user bugs happen.
+- **Per-user agent URLs.** Agents connect at `/mcp/<username>/<agent>`, so two users can both have an
+  agent called `claude`. A wrong username, a wrong agent, a wrong token and a disabled user all get the
+  same 401, so the endpoint doesn't reveal which usernames exist. The agent OAuth metadata accepts both
+  URL forms and echoes back the one that was asked for.
+- **Share a server with another user.** Share a server from the Servers page and the recipient accepts
+  it under an alias (suggested as `<owner>-<slug>`, editable). Their agents use your live connection
+  and your credentials, so there is one OAuth login and one running process, not a copy; they see its
+  name, description, status and tools under the alias, never its URL, command, headers or stderr. The
+  recipient switches it on per agent, can switch it off for all their agents, rename or remove it, and
+  the owner can revoke at any time, which takes effect immediately and notifies live sessions. The
+  owner sees per-person usage counts and last use. Aliases share a namespace with the recipient's own
+  server names, so a clash is rejected rather than silently shadowing a tool.
+- **"Can run local commands" permission, with escalation.** A stdio server runs a program on the host,
+  and a local command can read `secret.key`, so adding one directly now needs this permission, which
+  only the Admin can grant. Without it, pasting or adding a stdio server files a request that the Admin
+  approves; the Admin sees the user, agent, reason, command, arguments and environment variable
+  *names*, and approving creates the server owned by the requester. Agents can't create stdio servers
+  from a tool call at all. Granting the permission is an accepted trust boundary: a user who has it can
+  read every secret on the host.
+- **Sign in with Cloudflare Access.** The Admin can switch the instance from passwords to Cloudflare
+  Access (team domain and AUD tag(s) in Settings). The switchboard verifies the Access JWT on every
+  admin request and matches its email to a user; it never trusts the unsigned email header, refuses
+  service tokens, and creates no users on its own. Switching on is only accepted from a request that
+  carries a valid Access token for the Admin's own email, so a typo can't lock everyone out. Agent
+  paths never look at Access headers. See the new [Cloudflare Access guide](docs/cloudflare-access.md),
+  including the Bypass application agents need.
+- **Command-line recovery.** `mcp-switchboard reset-password <username>` and
+  `mcp-switchboard login-mode password` repair a lost password or a broken Access setup from the host,
+  while the server is running or not. Before this, the binary only started the server and had no way
+  back in. See [Recovering access](docs/recovering-access.md) for the npx and Docker forms.
+- **Per-user settings.** Auto-enable new servers, allow server requests and payload capture now belong
+  to each user and apply to their own servers and agents only. They are in **Settings, Yours**;
+  instance-wide settings are in **Settings, Instance** (Admin only).
+- **Manager agents and `list_servers` know about shares.** Received shares appear under their alias
+  with `sharedBy`. Manager agents can only list and manage their own owner's agents and servers, can
+  switch on shares by alias but not accept or modify them, and see status and counts, never stderr, for
+  a shared server.
+- **Guides in `docs/`.** Configuration, reverse proxy and HTTPS, Claude Desktop, Cloudflare Access,
+  recovering access and lean mode each have their own page.
+
+### Changed
+
+- **The README is a short landing page.** npm shows only the README, and at 230 lines it buried the
+  quick start. Configuration, reverse-proxy and Claude connector detail moved to `docs/` and the
+  README links to them.
+- **Login asks for a username.** The login page takes a username and password (plus the setup-code
+  path) instead of a lone admin password. A fresh install's first-run screen sets the password for
+  `admin`.
+- **Connection snippets show `/mcp/<username>/<agent>`.** The one-segment form still works but is no
+  longer advertised.
+- **Request logs record who and which server.** Each row carries the calling user and the server
+  reached, so owners see only their own traffic, and a shared server's usage is counted without
+  exposing the recipient's payloads to the owner.
+- **Disabling a user stops their servers and drops their agents' sessions.** Recipients of their shares
+  see the share as Unavailable until the user is enabled again.
+- **Cloudflare Access needs an Admin password first.** Switching to Access, or back to password
+  sign-in, is refused while the Admin has no password: it is the way back in if Access ever locks
+  you out, and first-run setup is only offered while the Admin is the sole user.
+
+### Removed
+
+- **Turning sign-in off.** The "Require sign-in" switch in Settings and the `authDisabled` setting are
+  gone. With several users there is no way to know who you are, and sessions already last a year, so
+  sign-in is always required. An install that had it off keeps working after you sign in again (see
+  "Upgrading from 1.x"); `POST /api/auth/settings` ignores an `authDisabled` key.
+
 ## [1.5.2] — 2026-10-11
 
 ### Fixed

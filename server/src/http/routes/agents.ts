@@ -1,10 +1,11 @@
 import { Hono } from "hono";
 import { z } from "zod";
+import type { Context } from "hono";
 import { and, eq } from "drizzle-orm";
-import { agentOAuthClients, agentOAuthGrants, agentServers, agents, servers, type AgentRow } from "../../db/schema.js";
-import { decrypt, encrypt, randomToken } from "../../lib/crypto.js";
-import { isValidSlug, slugify } from "../../lib/slug.js";
+import { agentOAuthClients, agentOAuthGrants, type AgentRow } from "../../db/schema.js";
+import { decrypt } from "../../lib/crypto.js";
 import { setMatrix } from "../../core/adminActions.js";
+import { userScope, type UserScope } from "../../core/userScope.js";
 import { adminDeps, type AppContext } from "../context.js";
 
 const createSchema = z.object({
@@ -21,14 +22,7 @@ const patchSchema = z.object({
 
 const matrixSchema = z.object({ enabled: z.boolean() });
 
-function serialize(ctx: AppContext, row: AgentRow) {
-  const matrix = ctx.db
-    .select({ serverId: agentServers.serverId, enabled: agentServers.enabled })
-    .from(agentServers)
-    .where(eq(agentServers.agentId, row.id))
-    .all();
-  const enabledMap = new Map(matrix.map((m) => [m.serverId, m.enabled]));
-  const allServers = ctx.db.select({ id: servers.id }).from(servers).all();
+function serialize(ctx: AppContext, scope: UserScope, row: AgentRow) {
   return {
     id: row.id,
     slug: row.slug,
@@ -38,7 +32,7 @@ function serialize(ctx: AppContext, row: AgentRow) {
     token: decrypt(row.tokenEnc),
     createdAt: row.createdAt,
     sessions: ctx.hub.sessionCount(row.id),
-    servers: allServers.map((s) => ({ serverId: s.id, enabled: enabledMap.get(s.id) ?? false })),
+    servers: scope.matrix.forAgent(row.id),
     oauthGrants: oauthGrants(ctx, row.id),
   };
 }
@@ -70,83 +64,66 @@ function oauthGrants(ctx: AppContext, agentId: number) {
     .map(({ redirectUrisJson, ...g }) => ({ ...g, redirectHost: redirectHost(redirectUrisJson) }));
 }
 
+const scopeOf = (ctx: AppContext, c: Context) => userScope(ctx.db, c.get("user"));
+
 export function agentRoutes(ctx: AppContext): Hono {
   const app = new Hono();
 
   app.get("/", (c) => {
-    const rows = ctx.db.select().from(agents).all();
-    return c.json(rows.map((r) => serialize(ctx, r)));
+    const scope = scopeOf(ctx, c);
+    return c.json(scope.agents.list().map((r) => serialize(ctx, scope, r)));
   });
 
   app.post("/", async (c) => {
     const parsed = createSchema.safeParse(await c.req.json().catch(() => null));
     if (!parsed.success) return c.json({ error: parsed.error.issues[0]?.message ?? "Invalid input" }, 400);
-    const slug = parsed.data.slug ?? slugify(parsed.data.name);
-    if (!isValidSlug(slug)) {
-      return c.json({ error: "Slug must be 1-64 chars of a-z, 0-9, and dashes (no underscores)" }, 400);
-    }
-    if (ctx.db.select().from(agents).where(eq(agents.slug, slug)).get()) {
-      return c.json({ error: `Slug "${slug}" is already in use` }, 409);
-    }
-    const row = ctx.db
-      .insert(agents)
-      .values({ slug, name: parsed.data.name, tokenEnc: encrypt(randomToken()), createdAt: Date.now() })
-      .returning()
-      .get();
-    return c.json(serialize(ctx, row), 201);
+    const scope = scopeOf(ctx, c);
+    const result = scope.agents.create(parsed.data);
+    if ("error" in result) return c.json({ error: result.error }, result.status);
+    return c.json(serialize(ctx, scope, result.row), 201);
   });
 
   app.patch("/:id", async (c) => {
     const id = Number(c.req.param("id"));
-    const row = ctx.db.select().from(agents).where(eq(agents.id, id)).get();
-    if (!row) return c.json({ error: "Not found" }, 404);
+    const scope = scopeOf(ctx, c);
+    if (!scope.agents.get(id)) return c.json({ error: "Not found" }, 404);
     const parsed = patchSchema.safeParse(await c.req.json().catch(() => null));
     if (!parsed.success) return c.json({ error: parsed.error.issues[0]?.message ?? "Invalid input" }, 400);
-    if (parsed.data.slug !== undefined) {
-      if (!isValidSlug(parsed.data.slug)) {
-        return c.json({ error: "Slug must be 1-64 chars of a-z, 0-9, and dashes (no underscores)" }, 400);
-      }
-      const clash = ctx.db.select().from(agents).where(eq(agents.slug, parsed.data.slug)).get();
-      if (clash && clash.id !== id) return c.json({ error: `Slug "${parsed.data.slug}" is already in use` }, 409);
-    }
-    const updated = ctx.db.update(agents).set(parsed.data).where(eq(agents.id, id)).returning().get();
+    const result = scope.agents.update(id, parsed.data);
+    if ("error" in result) return c.json({ error: result.error }, result.status);
+    const { row: updated, previous } = result;
     // Both fields reshape the advertised tool list — the role adds/removes the management tools,
     // the tool mode swaps the proxied tools for meta-tools. One notify covers a patch touching both.
-    const roleChanged = parsed.data.role !== undefined && parsed.data.role !== row.role;
-    const toolModeChanged = parsed.data.toolMode !== undefined && parsed.data.toolMode !== row.toolMode;
+    const roleChanged = parsed.data.role !== undefined && parsed.data.role !== previous.role;
+    const toolModeChanged = parsed.data.toolMode !== undefined && parsed.data.toolMode !== previous.toolMode;
     if (roleChanged || toolModeChanged) ctx.hub.notifyAgent(id, "tools");
-    return c.json(serialize(ctx, updated));
+    return c.json(serialize(ctx, scope, updated));
   });
 
   app.delete("/:id", async (c) => {
     const id = Number(c.req.param("id"));
-    const row = ctx.db.select().from(agents).where(eq(agents.id, id)).get();
-    if (!row) return c.json({ error: "Not found" }, 404);
+    const scope = scopeOf(ctx, c);
+    if (!scope.agents.get(id)) return c.json({ error: "Not found" }, 404);
     await ctx.hub.dropAgentSessions(id);
-    ctx.db.delete(agents).where(eq(agents.id, id)).run();
+    scope.agents.remove(id);
     return c.json({ ok: true });
   });
 
   app.post("/:id/token/rotate", async (c) => {
     const id = Number(c.req.param("id"));
-    const row = ctx.db.select().from(agents).where(eq(agents.id, id)).get();
-    if (!row) return c.json({ error: "Not found" }, 404);
+    const scope = scopeOf(ctx, c);
+    if (!scope.agents.get(id)) return c.json({ error: "Not found" }, 404);
     // Old token dies immediately: live sessions are dropped and the stored token replaced. OAuth
     // grants are separate credentials (approved with pairing codes) and are revoked on their own.
     await ctx.hub.dropAgentSessions(id);
-    const updated = ctx.db
-      .update(agents)
-      .set({ tokenEnc: encrypt(randomToken()) })
-      .where(eq(agents.id, id))
-      .returning()
-      .get();
-    return c.json(serialize(ctx, updated));
+    const updated = scope.agents.rotateToken(id)!;
+    return c.json(serialize(ctx, scope, updated));
   });
 
-  // One-time code the admin types on the OAuth consent page to approve a connection for this agent.
+  // One-time code the owner types on the OAuth consent page to approve a connection for this agent.
   app.post("/:id/oauth-pairing-code", (c) => {
     const id = Number(c.req.param("id"));
-    if (!ctx.db.select().from(agents).where(eq(agents.id, id)).get()) return c.json({ error: "Not found" }, 404);
+    if (!scopeOf(ctx, c).agents.get(id)) return c.json({ error: "Not found" }, 404);
     return c.json(ctx.agentOAuth.createPairingCode(id));
   });
 
@@ -154,6 +131,7 @@ export function agentRoutes(ctx: AppContext): Hono {
   app.delete("/:id/oauth-grants/:grantId", async (c) => {
     const agentId = Number(c.req.param("id"));
     const grantId = Number(c.req.param("grantId"));
+    if (!scopeOf(ctx, c).agents.get(agentId)) return c.json({ error: "Not found" }, 404);
     const deleted = ctx.db
       .delete(agentOAuthGrants)
       .where(and(eq(agentOAuthGrants.id, grantId), eq(agentOAuthGrants.agentId, agentId)))
@@ -167,15 +145,17 @@ export function agentRoutes(ctx: AppContext): Hono {
   app.put("/:id/servers/:serverId", async (c) => {
     const agentId = Number(c.req.param("id"));
     const serverId = Number(c.req.param("serverId"));
-    const agent = ctx.db.select().from(agents).where(eq(agents.id, agentId)).get();
+    const scope = scopeOf(ctx, c);
+    const agent = scope.agents.get(agentId);
     if (!agent) return c.json({ error: "Agent not found" }, 404);
-    const server = ctx.db.select().from(servers).where(eq(servers.id, serverId)).get();
-    if (!server) return c.json({ error: "Server not found" }, 404);
     const parsed = matrixSchema.safeParse(await c.req.json().catch(() => null));
     if (!parsed.success) return c.json({ error: "Body must be { enabled: boolean }" }, 400);
 
-    setMatrix(adminDeps(ctx), agentId, serverId, parsed.data.enabled);
-    return c.json(serialize(ctx, agent));
+    // The scope decides which servers this agent may be linked to; anything else reads as unknown.
+    if (!setMatrix(adminDeps(ctx), scope, agentId, serverId, parsed.data.enabled)) {
+      return c.json({ error: "Server not found" }, 404);
+    }
+    return c.json(serialize(ctx, scope, agent));
   });
 
   return app;

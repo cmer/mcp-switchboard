@@ -2,10 +2,9 @@ import crypto from "node:crypto";
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
 import type { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";
-import { and, eq } from "drizzle-orm";
-import type { Db } from "../db/index.js";
-import { agentServers, type AgentRow } from "../db/schema.js";
+import type { AgentRow } from "../db/schema.js";
 import { buildAgentServer, type AgentServerDeps } from "./agentServerFactory.js";
+import { agentsUsingServer } from "./systemView.js";
 import type { ChangedKind } from "./upstreamConnection.js";
 
 interface SessionEntry {
@@ -115,14 +114,12 @@ export class SwitchboardHub {
     return entry.transport.handleRequest(req);
   }
 
-  /** Fan out list_changed to every live session of agents that have `serverId` enabled. */
+  /**
+   * Fan out list_changed to every live session of agents that have `serverId` enabled — share
+   * recipients included, since their per-agent switches are ordinary matrix rows.
+   */
   notifyChanged(serverId: number, kind: ChangedKind): void {
-    const rows = this.deps.db
-      .select({ agentId: agentServers.agentId })
-      .from(agentServers)
-      .where(and(eq(agentServers.serverId, serverId), eq(agentServers.enabled, true)))
-      .all();
-    for (const { agentId } of rows) this.notifyAgent(agentId, kind);
+    for (const agentId of agentsUsingServer(this.deps.db, serverId)) this.notifyAgent(agentId, kind);
   }
 
   /** Fan out list_changed to every live session of one agent (all kinds if omitted). */

@@ -2,11 +2,11 @@ import { useMemo, useState, type ReactNode } from "react";
 import { ChevronDown, ChevronUp, Plus } from "lucide-react";
 import { toast } from "sonner";
 import { api } from "@/lib/api";
-import { useAgents, useApiMutation, useAuthMe, useServers } from "@/lib/hooks";
-import type { AgentInfo, AgentRole, OAuthGrant, ServerInfo, ToolMode } from "@/lib/types";
+import { useAgents, useApiMutation, useAuthMe, useServers, useShares } from "@/lib/hooks";
+import type { AgentInfo, AgentRole, OAuthGrant, ReceivedShare, ServerInfo, ToolMode } from "@/lib/types";
 import { cn, timeAgo } from "@/lib/utils";
 import { PageBar } from "@/components/Layout";
-import { StatusDot, statusInfo } from "@/components/StatusDot";
+import { receivedStatus, StatusDot, statusInfo } from "@/components/StatusDot";
 import { Badge, Button, CopyButton, Dialog, Field, Input, Switch, Tabs } from "@/components/ui";
 
 /**
@@ -16,7 +16,9 @@ import { Badge, Button, CopyButton, Dialog, Field, Input, Switch, Tabs } from "@
 function useEndpointUrl(): (slug: string) => string {
   const { data } = useAuthMe();
   const base = data?.mcpBaseUrl || window.location.origin;
-  return (slug) => `${base}/mcp/${slug}`;
+  const username = data?.user?.username;
+  // Endpoints are /mcp/<username>/<agent>; the bare /mcp/<agent> form only still works for the Default user.
+  return (slug) => (username ? `${base}/mcp/${username}/${slug}` : `${base}/mcp/${slug}`);
 }
 
 /* ---------- connect dialog ---------- */
@@ -167,7 +169,7 @@ function OAuthGrants({ agent }: { agent: AgentInfo }) {
 
 /* ---------- agent card ---------- */
 
-function AgentCard({ agent, servers }: { agent: AgentInfo; servers: ServerInfo[] }) {
+function AgentCard({ agent, servers, shares }: { agent: AgentInfo; servers: ServerInfo[]; shares: ReceivedShare[] }) {
   const [expanded, setExpanded] = useState(false);
   const [revealed, setRevealed] = useState(false);
   const [connectOpen, setConnectOpen] = useState(false);
@@ -176,8 +178,13 @@ function AgentCard({ agent, servers }: { agent: AgentInfo; servers: ServerInfo[]
   const enabledCount = agent.servers.filter((s) => s.enabled).length;
   const toolCount = useMemo(() => {
     const enabledIds = new Set(agent.servers.filter((s) => s.enabled).map((s) => s.serverId));
-    return servers.filter((s) => enabledIds.has(s.id) && s.state === "connected").reduce((sum, s) => sum + s.toolCount, 0);
-  }, [agent.servers, servers]);
+    const own = servers.filter((s) => enabledIds.has(s.id) && s.state === "connected").reduce((sum, s) => sum + s.toolCount, 0);
+    // A share counts only while my own switch for it is on and its owner's connection is up.
+    const shared = shares
+      .filter((s) => enabledIds.has(s.serverId) && s.enabled && s.status === "connected")
+      .reduce((sum, s) => sum + s.toolCount, 0);
+    return own + shared;
+  }, [agent.servers, servers, shares]);
 
   const setMatrix = useApiMutation(
     ({ serverId, enabled }: { serverId: number; enabled: boolean }) =>
@@ -222,7 +229,7 @@ function AgentCard({ agent, servers }: { agent: AgentInfo; servers: ServerInfo[]
         <span className="min-w-0 flex-1">
           <span className="block text-sm font-semibold tracking-tight">{agent.name}</span>
           <span className="block truncate text-xs text-faint">
-            {enabledCount} of {servers.length} servers · {toolCount} tools exposed
+            {enabledCount} of {servers.length + shares.length} servers · {toolCount} tools exposed
           </span>
         </span>
         {isManager && (
@@ -296,7 +303,7 @@ function AgentCard({ agent, servers }: { agent: AgentInfo; servers: ServerInfo[]
             <div className="min-w-0">
               <div className="text-[13px] font-medium">Manager</div>
               <div className="text-xs leading-relaxed text-faint">
-                Manager agents can register remote MCP servers and change every agent's server assignments via MCP
+                Manager agents can register remote MCP servers and change your agents' server assignments via MCP
                 tools. stdio servers still require your approval. Grant this only to agents you drive directly.
               </div>
             </div>
@@ -330,10 +337,11 @@ function AgentCard({ agent, servers }: { agent: AgentInfo; servers: ServerInfo[]
             <span className="text-[11px] text-faint">changes apply live</span>
           </div>
           <div className="overflow-hidden rounded-[10px] border border-border-soft">
-            {servers.length === 0 ? (
+            {servers.length === 0 && shares.length === 0 ? (
               <p className="px-3 py-3 text-xs text-faint">No servers configured yet — add one on the Servers page.</p>
             ) : (
-              servers.map((server) => {
+              <>
+              {servers.map((server) => {
                 const entry = agent.servers.find((s) => s.serverId === server.id);
                 const enabled = entry?.enabled ?? false;
                 const status = statusInfo(server);
@@ -352,7 +360,31 @@ function AgentCard({ agent, servers }: { agent: AgentInfo; servers: ServerInfo[]
                     />
                   </div>
                 );
-              })
+              })}
+              {shares.map((share) => {
+                const enabled = agent.servers.find((s) => s.serverId === share.serverId)?.enabled ?? false;
+                const status = receivedStatus(share);
+                return (
+                  <div
+                    key={`share-${share.id}`}
+                    className="flex items-center gap-2.5 border-b border-border-soft bg-panel px-3 py-2 last:border-0"
+                  >
+                    <StatusDot tone={status.tone} />
+                    <span className="min-w-0 flex-1 truncate font-mono text-xs">{share.alias}</span>
+                    <Badge className="border-primary/40 px-2 py-0.5 text-[10.5px] text-primary">from {share.ownerUsername}</Badge>
+                    <span className="min-w-[64px] text-right font-mono text-[11px] tabular-nums text-muted-fg">
+                      {!share.enabled ? "off for me" : share.status === "connected" ? `${share.toolCount} tools` : "—"}
+                    </span>
+                    <Switch
+                      checked={enabled && share.enabled}
+                      disabled={!share.enabled}
+                      onChange={(v) => setMatrix.mutate({ serverId: share.serverId, enabled: v })}
+                      label={`${share.alias} for ${agent.name}`}
+                    />
+                  </div>
+                );
+              })}
+              </>
             )}
           </div>
         </div>
@@ -367,6 +399,7 @@ function AgentCard({ agent, servers }: { agent: AgentInfo; servers: ServerInfo[]
 export function AgentsPage() {
   const { data: agents, isLoading } = useAgents();
   const { data: servers } = useServers();
+  const { data: sharesData } = useShares();
   const [dialogOpen, setDialogOpen] = useState(false);
   const [name, setName] = useState("");
 
@@ -401,7 +434,7 @@ export function AgentsPage() {
           <p className="mt-1 text-xs text-faint">Create one per tool that should reach your MCP servers — Claude Code, Codex, …</p>
         </div>
       ) : (
-        agents!.map((agent) => <AgentCard key={agent.id} agent={agent} servers={servers ?? []} />)
+        agents!.map((agent) => <AgentCard key={agent.id} agent={agent} servers={servers ?? []} shares={sharesData?.accepted ?? []} />)
       )}
 
       <Dialog open={dialogOpen} onClose={() => setDialogOpen(false)} title="Add agent" description="Each agent gets its own endpoint and bearer token.">

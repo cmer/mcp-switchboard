@@ -6,12 +6,13 @@ import { LogsPage } from "@/pages/Logs";
 import { Login } from "@/pages/Login";
 import { ServersPage } from "@/pages/Servers";
 import { SettingsPage } from "@/pages/Settings";
+import { UsersPage } from "@/pages/Users";
 
 export function App() {
   const { data: auth, isLoading } = useAuthMe();
 
   if (isLoading) return null;
-  if (!auth?.authenticated) return <Login needsSetup={auth?.needsSetup ?? false} />;
+  if (!auth?.authenticated) return <Login auth={auth} />;
 
   return (
     <Layout>
@@ -21,6 +22,7 @@ export function App() {
         <Route path="/agents" element={<AgentsPage />} />
         <Route path="/logs" element={<LogsPage />} />
         <Route path="/settings" element={<SettingsPage />} />
+        {auth.user?.role === "admin" && <Route path="/users" element={<UsersPage />} />}
         <Route path="*" element={<Navigate to="/servers" replace />} />
       </Routes>
     </Layout>

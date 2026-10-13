@@ -1,10 +1,9 @@
 import type { Context } from "hono";
 import { cors } from "hono/cors";
-import { eq } from "drizzle-orm";
 import { config } from "../config.js";
-import { agents } from "../db/schema.js";
 import { decrypt, timingSafeEqualStr } from "../lib/crypto.js";
-import { oauthBaseUrl, resourceMetadataUrl } from "./agentOAuthRoutes.js";
+import { endpointAgent } from "./agentEndpoint.js";
+import { oauthBaseUrl } from "./agentOAuthRoutes.js";
 import type { AppContext } from "./context.js";
 
 /**
@@ -20,16 +19,20 @@ export const mcpCors = cors({
 });
 
 /**
- * ALL /mcp/:agentSlug → SwitchboardHub. Accepts the agent's static bearer token or an OAuth access
- * token issued to that agent; every request re-authenticates, so revocation takes effect at once.
+ * ALL /mcp/:username/:agentSlug and the legacy ALL /mcp/:agentSlug (the Default user's agent) →
+ * SwitchboardHub. Accepts the agent's static bearer token or an OAuth access token issued to that
+ * agent, whichever URL form it was issued through; every request re-authenticates, so revocation
+ * takes effect at once.
  */
 export function mcpEndpointHandler(ctx: AppContext) {
   return async (c: Context): Promise<Response> => {
-    const slug = c.req.param("agentSlug") ?? "";
-    const agent = ctx.db.select().from(agents).where(eq(agents.slug, slug)).get();
+    const username = c.req.param("username");
+    const agent = endpointAgent(ctx.db, { username: username ?? null, agentSlug: c.req.param("agentSlug") ?? "" });
 
     const header = c.req.header("Authorization") ?? "";
     const presented = header.startsWith("Bearer ") ? header.slice("Bearer ".length).trim() : "";
+    // Unknown user, unknown agent, disabled user and wrong token all get this same 401, so the
+    // endpoint never reveals which usernames or agents exist.
     const valid =
       agent !== undefined &&
       presented !== "" &&
@@ -37,7 +40,9 @@ export function mcpEndpointHandler(ctx: AppContext) {
         timingSafeEqualStr(presented, decrypt(agent.tokenEnc)));
     if (!valid) {
       // The resource_metadata pointer is how OAuth clients find the authorization server (RFC 9728 §5.1).
-      const metadata = resourceMetadataUrl(oauthBaseUrl(c.req.raw, config.oauthPublicUrl, config.publicUrl), slug);
+      // It names the URL exactly as requested (still percent-encoded, so it can't break the header).
+      const path = new URL(c.req.url).pathname.replace(/\/$/, "");
+      const metadata = `${oauthBaseUrl(c.req.raw, config.oauthPublicUrl, config.publicUrl)}/.well-known/oauth-protected-resource${path}`;
       const challenge = presented
         ? `Bearer error="invalid_token", resource_metadata="${metadata}"`
         : `Bearer resource_metadata="${metadata}"`;

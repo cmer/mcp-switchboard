@@ -6,10 +6,12 @@ import type { Hono } from "hono";
 import { auth, refreshAuthorization, type OAuthClientProvider } from "@modelcontextprotocol/sdk/client/auth.js";
 import type { OAuthClientInformationMixed, OAuthTokens } from "@modelcontextprotocol/sdk/shared/auth.js";
 import { closeDb, initDb, type Db } from "../src/db/index.js";
+import { defaultUserId } from "../src/core/users.js";
 import { agentOAuthGrants, agents } from "../src/db/schema.js";
 import { encrypt, loadOrCreateKey } from "../src/lib/crypto.js";
 import { createMcpApp } from "../src/http/app.js";
 import { agentRoutes } from "../src/http/routes/agents.js";
+import { mountAs } from "./helpers/mountAs.js";
 import { isAcceptableRedirectUri, oauthBaseUrl, redirectUriMatches, slugFromResource } from "../src/http/agentOAuthRoutes.js";
 import type { AppContext } from "../src/http/context.js";
 import { ACCESS_TTL_MS, AgentOAuthStore, REFRESH_GRACE_MS } from "../src/oauth/agentOAuth.js";
@@ -121,8 +123,8 @@ beforeEach(() => {
   tmp = fs.mkdtempSync(path.join(os.tmpdir(), "sb-agent-oauth-"));
   loadOrCreateKey(tmp);
   db = initDb(tmp);
-  claudeId = db.insert(agents).values({ slug: "claude", name: "Claude", tokenEnc: encrypt("static-claude"), createdAt: 1 }).returning().get().id;
-  codexId = db.insert(agents).values({ slug: "codex", name: "Codex", tokenEnc: encrypt("static-codex"), createdAt: 1 }).returning().get().id;
+  claudeId = db.insert(agents).values({ userId: defaultUserId(db), slug: "claude", name: "Claude", tokenEnc: encrypt("static-claude"), createdAt: 1 }).returning().get().id;
+  codexId = db.insert(agents).values({ userId: defaultUserId(db), slug: "codex", name: "Codex", tokenEnc: encrypt("static-codex"), createdAt: 1 }).returning().get().id;
   store = new AgentOAuthStore(db);
   dropAgentSessions = vi.fn(async () => {});
   const hub = {
@@ -174,8 +176,10 @@ describe("discovery", () => {
     expect(oauthBaseUrl(viaCaddy, "https://mcp.example.com", "https://sb.example.com")).toBe("https://mcp.example.com");
   });
 
-  it("404s the metadata of an agent that doesn't exist", async () => {
-    expect((await app.request(`${BASE}/.well-known/oauth-protected-resource/mcp/nope`)).status).toBe(404);
+  it("answers the metadata of an agent that doesn't exist like any other, so existence isn't revealed", async () => {
+    const res = await app.request(`${BASE}/.well-known/oauth-protected-resource/mcp/nope`);
+    expect(res.status).toBe(200);
+    expect(((await res.json()) as { resource: string }).resource).toBe(`${BASE}/mcp/nope`);
   });
 
   it("advertises no scopes and S256-only PKCE", async () => {
@@ -403,17 +407,21 @@ describe("authorize request validation", () => {
     expect(isAcceptableRedirectUri("https://claude.ai/cb#frag")).toBe(false);
   });
 
-  it("reads the agent slug from the resource URL path", () => {
-    expect(slugFromResource(MCP_URL)).toBe("claude");
-    expect(slugFromResource("http://internal:8788/mcp/claude/")).toBe("claude");
-    expect(slugFromResource(`${BASE}/mcp/claude/extra`)).toBeNull();
+  it("reads the agent from the resource URL path, in either form", () => {
+    expect(slugFromResource(MCP_URL)).toEqual({ username: null, agentSlug: "claude" });
+    expect(slugFromResource("http://internal:8788/mcp/claude/")).toEqual({ username: null, agentSlug: "claude" });
+    expect(slugFromResource(`${BASE}/mcp/alice/claude`)).toEqual({ username: "alice", agentSlug: "claude" });
+    expect(slugFromResource(`${BASE}/mcp/alice/claude/`)).toEqual({ username: "alice", agentSlug: "claude" });
+    expect(slugFromResource(`${BASE}/mcp/alice/claude/extra`)).toBeNull();
+    expect(slugFromResource(`${BASE}/mcp/Alice/claude`)).toBeNull();
+    expect(slugFromResource("not a url")).toBeNull();
   });
 });
 
 describe("admin routes", () => {
   function adminApi() {
     const hub = { sessionCount: () => 0, dropAgentSessions, notifyAgent: () => {} };
-    return agentRoutes({ db, hub, agentOAuth: store } as unknown as AppContext);
+    return mountAs(db, agentRoutes({ db, hub, agentOAuth: store } as unknown as AppContext));
   }
 
   it("mints a pairing code for an agent and lists then revokes its grants", async () => {

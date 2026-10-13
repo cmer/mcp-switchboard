@@ -1,14 +1,17 @@
 import { Hono } from "hono";
 import { z } from "zod";
-import { and, eq } from "drizzle-orm";
+import { eq } from "drizzle-orm";
+import type { Context } from "hono";
 import { auth } from "@modelcontextprotocol/sdk/client/auth.js";
-import { agentServers, oauthCredentials, servers, type ServerRow } from "../../db/schema.js";
-import { decrypt, encrypt } from "../../lib/crypto.js";
-import { parseImport } from "../../lib/importParser.js";
-import { isReservedSlug, isValidSlug } from "../../lib/slug.js";
-import { addServers, detectAuth, insertServer } from "../../core/adminActions.js";
+import { oauthCredentials, type ServerRow } from "../../db/schema.js";
+import { decrypt } from "../../lib/crypto.js";
+import { parseImport, type ParsedServer } from "../../lib/importParser.js";
+import { slugify } from "../../lib/slug.js";
+import { addServers, detectAuth, fileServerRequest, insertServer } from "../../core/adminActions.js";
 import { nsName } from "../../core/namespace.js";
+import { userScope, type OwnedShare, type UserScope } from "../../core/userScope.js";
 import { adminDeps, type AppContext } from "../context.js";
+import { serializeOwnedShare } from "./shares.js";
 
 const createSchema = z.object({
   name: z.string().min(1).max(100),
@@ -36,7 +39,7 @@ const patchSchema = createSchema.partial().extend({
 });
 
 /** Exported so an approved request can return exactly the shape GET /api/servers/:id does. */
-export function serializeServer(ctx: AppContext, row: ServerRow) {
+export function serializeServer(ctx: AppContext, row: ServerRow, sharedWith: OwnedShare[] = []) {
   const conn = ctx.manager.get(row.id);
   const oauthRow =
     row.authType === "oauth"
@@ -68,18 +71,30 @@ export function serializeServer(ctx: AppContext, row: ServerRow) {
     toolCount: conn?.toolsCache.length ?? 0,
     oauthStatus: oauthRow?.status ?? null,
     tokenExpiresAt: oauthRow?.tokenExpiresAt ?? null,
+    // Who it is shared with (names and usage), for the "shared with …" badge without a call per server.
+    sharedWith: sharedWith.map(serializeOwnedShare),
   };
 }
 
-/** Agents that currently have this server enabled (notify them after a mutation). */
-function affectedAgents(ctx: AppContext, serverId: number): number[] {
-  return ctx.db
-    .select({ agentId: agentServers.agentId })
-    .from(agentServers)
-    .where(and(eq(agentServers.serverId, serverId), eq(agentServers.enabled, true)))
-    .all()
-    .map((r) => r.agentId);
+/** Said back when a local command is filed for the Admin instead of being created. */
+export const LOCAL_COMMAND_ESCALATED_NOTE =
+  "Local commands need the Admin's approval on this switchboard — it's waiting for the Admin";
+
+/** Changing any of these on a local server changes what runs on the host. */
+const LOCAL_COMMAND_FIELDS = ["type", "command", "args", "env", "cwd"] as const;
+
+/** File a local server the caller may not run as an escalated request (they can cancel it). */
+function escalate(scope: UserScope, server: ParsedServer): number {
+  return fileServerRequest(scope, {
+    agentId: null,
+    agentSlug: "",
+    kind: "add_server",
+    payload: server,
+    reason: `Added in the web UI by ${scope.user.username}`,
+  }).id;
 }
+
+const scopeOf = (ctx: AppContext, c: Context) => userScope(ctx.db, c.get("user"));
 
 const importSchema = z.object({ text: z.string().min(1), dryRun: z.boolean().optional().default(false) });
 
@@ -87,14 +102,38 @@ export function serverRoutes(ctx: AppContext): Hono {
   const app = new Hono();
 
   app.get("/", (c) => {
-    const rows = ctx.db.select().from(servers).all();
-    return c.json(rows.map((r) => serializeServer(ctx, r)));
+    const scope = scopeOf(ctx, c);
+    const shared = scope.shares.summaries();
+    return c.json(scope.servers.list().map((r) => serializeServer(ctx, r, shared.get(r.id))));
   });
 
   app.post("/", async (c) => {
     const parsed = createSchema.safeParse(await c.req.json().catch(() => null));
     if (!parsed.success) return c.json({ error: parsed.error.issues[0]?.message ?? "Invalid input" }, 400);
-    const result = insertServer(adminDeps(ctx), parsed.data);
+    const scope = scopeOf(ctx, c);
+    const input = parsed.data;
+
+    if (input.type === "stdio" && !scope.canRunLocalCommands) {
+      // Checked now, so the Admin isn't handed a request that can't be approved as filed.
+      const slug = input.slug ?? slugify(input.name);
+      const bad = scope.servers.checkSlug(slug);
+      if (bad) return c.json({ error: bad.error }, bad.status);
+      if (!input.command) return c.json({ error: "Local servers need a command" }, 400);
+      const requestId = escalate(scope, {
+        name: input.name,
+        slug,
+        type: "stdio",
+        command: input.command,
+        args: input.args,
+        env: input.env,
+        cwd: input.cwd ?? null,
+        description: input.description ?? null,
+        authType: "none",
+      });
+      return c.json({ requested: true, requestId, escalated: true, message: LOCAL_COMMAND_ESCALATED_NOTE }, 202);
+    }
+
+    const result = insertServer(scope, input);
     if ("error" in result) return c.json({ error: result.error }, result.status);
     await ctx.manager.reconcile();
     return c.json(serializeServer(ctx, result.row), 201);
@@ -104,6 +143,7 @@ export function serverRoutes(ctx: AppContext): Hono {
     const body = importSchema.safeParse(await c.req.json().catch(() => null));
     if (!body.success) return c.json({ error: "Body must be { text, dryRun? }" }, 400);
 
+    const scope = scopeOf(ctx, c);
     let parsed;
     try {
       parsed = parseImport(body.data.text);
@@ -127,111 +167,99 @@ export function serverRoutes(ctx: AppContext): Hono {
           authType: p.authType,
           detectedAuth: detected[i] === "oauth" || detected[i] === "auth_required" ? detected[i] : null,
           envKeys: p.env ? Object.keys(p.env) : [],
-          slugTaken: !!ctx.db.select().from(servers).where(eq(servers.slug, p.slug)).get(),
+          slugTaken: scope.servers.checkSlug(p.slug)?.status === 409,
+          // Saving files it for the Admin instead of creating it.
+          needsApproval: p.type === "stdio" && !scope.canRunLocalCommands,
         })),
       });
     }
 
-    const results = await addServers(adminDeps(ctx), parsed);
-    const created: ReturnType<typeof serializeServer>[] = [];
+    // Local commands the caller can't run become escalated requests, one per server.
+    const direct = parsed.filter((p) => p.type !== "stdio" || scope.canRunLocalCommands);
+    const requested: { name: string; slug: string; requestId: number }[] = [];
     const errors: { name: string; error: string }[] = [];
+    for (const p of parsed) {
+      if (direct.includes(p)) continue;
+      const bad = scope.servers.checkSlug(p.slug);
+      if (bad) errors.push({ name: p.name, error: bad.error });
+      else requested.push({ name: p.name, slug: p.slug, requestId: escalate(scope, p) });
+    }
+
+    const results = await addServers(adminDeps(ctx), scope, direct);
+    const created: ReturnType<typeof serializeServer>[] = [];
     results.forEach((result, i) => {
-      if ("error" in result) errors.push({ name: parsed[i].name, error: result.error });
+      if ("error" in result) errors.push({ name: direct[i].name, error: result.error });
       else created.push(serializeServer(ctx, result.row));
     });
-    return c.json({ created, errors }, errors.length > 0 && created.length === 0 ? 400 : 201);
+    const nothingDone = created.length === 0 && requested.length === 0;
+    return c.json(
+      {
+        created,
+        errors,
+        ...(requested.length > 0 ? { requested, message: LOCAL_COMMAND_ESCALATED_NOTE } : {}),
+      },
+      errors.length > 0 && nothingDone ? 400 : 201,
+    );
   });
 
   app.get("/:id", (c) => {
-    const row = ctx.db.select().from(servers).where(eq(servers.id, Number(c.req.param("id")))).get();
+    const scope = scopeOf(ctx, c);
+    const row = scope.servers.get(Number(c.req.param("id")));
     if (!row) return c.json({ error: "Not found" }, 404);
-    return c.json(serializeServer(ctx, row));
+    return c.json(serializeServer(ctx, row, scope.shares.forServer(row.id)));
   });
 
   app.patch("/:id", async (c) => {
     const id = Number(c.req.param("id"));
-    const row = ctx.db.select().from(servers).where(eq(servers.id, id)).get();
+    const scope = scopeOf(ctx, c);
+    const row = scope.servers.get(id);
     if (!row) return c.json({ error: "Not found" }, 404);
     const parsed = patchSchema.safeParse(await c.req.json().catch(() => null));
     if (!parsed.success) return c.json({ error: parsed.error.issues[0]?.message ?? "Invalid input" }, 400);
     const input = parsed.data;
 
-    if (input.slug !== undefined) {
-      if (!isValidSlug(input.slug)) {
-        return c.json({ error: "Slug must be 1-64 chars of a-z, 0-9, and dashes (no underscores)" }, 400);
-      }
-      if (isReservedSlug(input.slug)) {
-        return c.json({ error: `Slug "${input.slug}" is reserved for the switchboard's own tools` }, 400);
-      }
-      const clash = ctx.db.select().from(servers).where(eq(servers.slug, input.slug)).get();
-      if (clash && clash.id !== id) return c.json({ error: `Slug "${input.slug}" is already in use` }, 409);
+    // Approved local servers stay usable (rename, describe, switch off), but what runs is the Admin's call.
+    const staysLocal = (input.type ?? row.type) === "stdio";
+    if (staysLocal && !scope.canRunLocalCommands && LOCAL_COMMAND_FIELDS.some((k) => input[k] !== undefined)) {
+      return c.json({ error: "Changing a local command needs the Admin's \"can run local commands\" permission" }, 403);
     }
 
-    const wasOauth = row.authType === "oauth";
-    const values: Partial<typeof servers.$inferInsert> = { updatedAt: Date.now() };
-    if (input.name !== undefined) values.name = input.name;
-    if (input.slug !== undefined) values.slug = input.slug;
-    if (input.description !== undefined) values.description = input.description || null;
-    if (input.type !== undefined) values.type = input.type;
-    if (input.enabled !== undefined) values.enabled = input.enabled;
-    if (input.command !== undefined) values.command = input.command;
-    if (input.args !== undefined) values.argsJson = JSON.stringify(input.args);
-    if (input.cwd !== undefined) values.cwd = input.cwd;
-    if (input.url !== undefined) values.url = input.url;
-    if (input.authType !== undefined) values.authType = input.authType;
-    if (input.env !== undefined) {
-      values.envJsonEnc = input.env && Object.keys(input.env).length > 0 ? encrypt(JSON.stringify(input.env)) : null;
-    }
-    if (input.bearerToken !== undefined) {
-      values.bearerTokenEnc = input.bearerToken ? encrypt(input.bearerToken) : null;
-    }
-    if (input.headers !== undefined) {
-      values.headersJsonEnc =
-        input.headers && Object.keys(input.headers).length > 0 ? encrypt(JSON.stringify(input.headers)) : null;
-    }
-
-    const affected = affectedAgents(ctx, id);
-    const updated = ctx.db.update(servers).set(values).where(eq(servers.id, id)).returning().get();
-
-    if (updated.authType === "oauth" && !wasOauth) {
-      ctx.db
-        .insert(oauthCredentials)
-        .values({ serverId: id, status: "needs_auth", updatedAt: Date.now() })
-        .onConflictDoNothing()
-        .run();
-    }
+    const result = scope.servers.update(id, input);
+    if ("error" in result) return c.json({ error: result.error }, result.status);
     await ctx.manager.reconcile();
-    for (const agentId of affected) ctx.hub.notifyAgent(agentId);
-    return c.json(serializeServer(ctx, updated));
+    for (const agentId of result.affectedAgentIds) ctx.hub.notifyAgent(agentId);
+    return c.json(serializeServer(ctx, result.row, scope.shares.forServer(id)));
   });
 
   app.delete("/:id", async (c) => {
     const id = Number(c.req.param("id"));
-    const row = ctx.db.select().from(servers).where(eq(servers.id, id)).get();
-    if (!row) return c.json({ error: "Not found" }, 404);
-    const affected = affectedAgents(ctx, id);
+    const scope = scopeOf(ctx, c);
+    if (!scope.servers.get(id)) return c.json({ error: "Not found" }, 404);
     ctx.refresher.cancel(id);
-    ctx.db.delete(servers).where(eq(servers.id, id)).run();
+    const { affectedAgentIds } = scope.servers.remove(id)!;
     await ctx.manager.reconcile();
-    for (const agentId of affected) ctx.hub.notifyAgent(agentId);
+    for (const agentId of affectedAgentIds) ctx.hub.notifyAgent(agentId);
     return c.json({ ok: true });
   });
 
   app.post("/:id/restart", async (c) => {
     const id = Number(c.req.param("id"));
+    if (!scopeOf(ctx, c).servers.get(id)) return c.json({ error: "Server not found or disabled" }, 404);
     const ok = await ctx.manager.restart(id);
     if (!ok) return c.json({ error: "Server not found or disabled" }, 404);
     return c.json({ ok: true });
   });
 
+  // stderr can carry anything the server printed: its owner's eyes only.
   app.get("/:id/logs", (c) => {
-    const conn = ctx.manager.get(Number(c.req.param("id")));
-    return c.json({ lines: conn?.stderrLog.toArray() ?? [] });
+    const id = Number(c.req.param("id"));
+    if (!scopeOf(ctx, c).servers.get(id)) return c.json({ error: "Not found" }, 404);
+    return c.json({ lines: ctx.manager.get(id)?.stderrLog.toArray() ?? [] });
   });
 
   app.get("/:id/tools", (c) => {
     const id = Number(c.req.param("id"));
-    const row = ctx.db.select().from(servers).where(eq(servers.id, id)).get();
+    const row = scopeOf(ctx, c).servers.get(id);
     if (!row) return c.json({ error: "Not found" }, 404);
     const conn = ctx.manager.get(id);
     return c.json({
@@ -245,9 +273,10 @@ export function serverRoutes(ctx: AppContext): Hono {
     });
   });
 
+  // Only the owner authorizes: the tokens it produces are theirs.
   app.post("/:id/oauth/start", async (c) => {
     const id = Number(c.req.param("id"));
-    const row = ctx.db.select().from(servers).where(eq(servers.id, id)).get();
+    const row = scopeOf(ctx, c).servers.get(id);
     if (!row) return c.json({ error: "Not found" }, 404);
     if (row.authType !== "oauth" || !row.url) return c.json({ error: "Server is not OAuth-configured" }, 400);
 

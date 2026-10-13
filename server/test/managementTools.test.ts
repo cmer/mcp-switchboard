@@ -6,6 +6,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { and, eq } from "drizzle-orm";
 import { closeDb, initDb, type Db } from "../src/db/index.js";
+import { defaultUserId } from "../src/core/users.js";
 import { agentServers, agents, serverRequests, servers } from "../src/db/schema.js";
 import {
   buildAgentServer,
@@ -27,7 +28,7 @@ let notifyAgent: ReturnType<typeof vi.fn>;
 let tmp: string;
 
 /** No connections: every server the tools create reports as "connecting". */
-const emptyManager = { get: () => undefined, getBySlug: () => undefined } as unknown as UpstreamManager;
+const emptyManager = { get: () => undefined } as unknown as UpstreamManager;
 
 function agentId(slug: string): number {
   return db.select({ id: agents.id }).from(agents).where(eq(agents.slug, slug)).get()!.id;
@@ -64,13 +65,13 @@ beforeEach(() => {
   db = initDb(tmp);
   const now = Date.now();
   db.insert(agents)
-    .values({ slug: "boss", name: "Boss", role: "manager", tokenEnc: encrypt(BOSS_TOKEN), createdAt: now })
+    .values({ userId: defaultUserId(db), slug: "boss", name: "Boss", role: "manager", tokenEnc: encrypt(BOSS_TOKEN), createdAt: now })
     .run();
   db.insert(agents)
-    .values({ slug: "helper", name: "Helper", role: "standard", tokenEnc: encrypt(HELPER_TOKEN), createdAt: now })
+    .values({ userId: defaultUserId(db), slug: "helper", name: "Helper", role: "standard", tokenEnc: encrypt(HELPER_TOKEN), createdAt: now })
     .run();
   db.insert(servers)
-    .values({ slug: "github", name: "GitHub", type: "http", url: "https://api.github.com/mcp", createdAt: now, updatedAt: now })
+    .values({ userId: defaultUserId(db), slug: "github", name: "GitHub", type: "http", url: "https://api.github.com/mcp", createdAt: now, updatedAt: now })
     .run();
 
   notifyAgent = vi.fn();

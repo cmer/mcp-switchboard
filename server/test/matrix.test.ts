@@ -3,13 +3,10 @@ import os from "node:os";
 import path from "node:path";
 import { beforeAll, describe, expect, it } from "vitest";
 import { closeDb, initDb, type Db } from "../src/db/index.js";
+import { defaultUserId } from "../src/core/users.js";
 import { agentServers, agents, servers } from "../src/db/schema.js";
-import {
-  annotateDescription,
-  enabledConnections,
-  resolveTarget,
-  type AgentServerDeps,
-} from "../src/core/agentServerFactory.js";
+import { annotateDescription, type AgentServerDeps } from "../src/core/agentServerFactory.js";
+import { agentReach } from "../src/core/agentReach.js";
 import { loadOrCreateKey, encrypt } from "../src/lib/crypto.js";
 import type { UpstreamConnection, UpstreamState } from "../src/core/upstreamConnection.js";
 import type { UpstreamManager } from "../src/core/upstreamManager.js";
@@ -31,7 +28,6 @@ function fakeConn(id: number, slug: string, state: UpstreamState, tools: string[
 function fakeManager(conns: UpstreamConnection[]): UpstreamManager {
   return {
     get: (id: number) => conns.find((c) => c.serverId === id),
-    getBySlug: (slug: string) => conns.find((c) => c.row.slug === slug),
   } as unknown as UpstreamManager;
 }
 
@@ -53,6 +49,7 @@ beforeAll(() => {
   ] as const) {
     db.insert(servers)
       .values({
+        userId: defaultUserId(db),
         id,
         slug,
         name: slug,
@@ -63,7 +60,7 @@ beforeAll(() => {
       })
       .run();
   }
-  db.insert(agents).values({ id: AGENT_ID, slug: "claude", name: "Claude", tokenEnc: encrypt("t"), createdAt: now }).run();
+  db.insert(agents).values({ userId: defaultUserId(db), id: AGENT_ID, slug: "claude", name: "Claude", tokenEnc: encrypt("t"), createdAt: now }).run();
   db.insert(agentServers).values({ agentId: AGENT_ID, serverId: 1, enabled: true }).run();
   db.insert(agentServers).values({ agentId: AGENT_ID, serverId: 2, enabled: true }).run();
   db.insert(agentServers).values({ agentId: AGENT_ID, serverId: 3, enabled: false }).run();
@@ -78,10 +75,11 @@ beforeAll(() => {
   deps = { db, manager: fakeManager(conns), version: "test" };
 });
 
-describe("enabledConnections", () => {
+const reach = () => agentReach(db, { id: AGENT_ID, userId: defaultUserId(db) }, deps.manager);
+
+describe("agent reach: connected", () => {
   it("includes only matrix-enabled + globally-enabled + connected servers", () => {
-    const conns = enabledConnections(deps, AGENT_ID);
-    expect(conns.map((c) => c.row.slug)).toEqual(["github"]);
+    expect(reach().connected().map((t) => t.server.name)).toEqual(["github"]);
   });
 });
 
@@ -102,19 +100,16 @@ describe("annotateDescription", () => {
   });
 });
 
-describe("resolveTarget", () => {
-  it("resolves a namespaced tool to its connection", () => {
-    const { conn, name } = resolveTarget(deps, AGENT_ID, "github__create_issue");
-    expect(conn.row.slug).toBe("github");
-    expect(name).toBe("create_issue");
+describe("agent reach: resolve", () => {
+  it("resolves a server name to its connection", () => {
+    const target = reach().resolve("github");
+    expect(target?.conn.serverId).toBe(1);
+    expect(target?.server).toMatchObject({ name: "github", serverId: 1 });
   });
 
   it("rejects servers not enabled for this agent, indistinguishably from unknown ones", () => {
-    expect(() => resolveTarget(deps, AGENT_ID, "linear__create_ticket")).toThrow('Unknown server "linear"');
-  });
-
-  it("rejects unknown servers and malformed names", () => {
-    expect(() => resolveTarget(deps, AGENT_ID, "nope__tool")).toThrow(/Unknown server/);
-    expect(() => resolveTarget(deps, AGENT_ID, "no-separator")).toThrow(/Unknown name/);
+    expect(reach().resolve("linear")).toBeUndefined();
+    expect(reach().resolve("globally-off")).toBeUndefined();
+    expect(reach().resolve("nope")).toBeUndefined();
   });
 });

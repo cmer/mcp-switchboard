@@ -3,17 +3,20 @@ import path from "node:path";
 import { Hono } from "hono";
 import { eq } from "drizzle-orm";
 import { auth } from "@modelcontextprotocol/sdk/client/auth.js";
-import { oauthCredentials, servers } from "../db/schema.js";
-import { adminAuthMiddleware } from "./adminAuth.js";
+import { oauthCredentials } from "../db/schema.js";
+import { userScope } from "../core/userScope.js";
+import { adminAuthMiddleware, requestUser } from "./adminAuth.js";
 import type { AppContext } from "./context.js";
 import { config } from "../config.js";
 import { agentOAuthRoutes } from "./agentOAuthRoutes.js";
 import { mcpCors, mcpEndpointHandler } from "./mcpEndpoint.js";
 import { agentRoutes } from "./routes/agents.js";
-import { authRoutes, isAuthDisabled } from "./routes/auth.js";
+import { authRoutes } from "./routes/auth.js";
 import { logRoutes } from "./routes/logs.js";
 import { requestRoutes } from "./routes/requests.js";
+import { directoryRoutes, ownerShareRoutes, receivedShareRoutes } from "./routes/shares.js";
 import { serverRoutes } from "./routes/servers.js";
+import { userRoutes } from "./routes/users.js";
 
 const MIME: Record<string, string> = {
   ".html": "text/html; charset=utf-8",
@@ -34,7 +37,7 @@ const MIME: Record<string, string> = {
 export function createMcpApp(ctx: AppContext): Hono {
   const app = new Hono();
   mountMcp(app, ctx);
-  app.all("*", (c) => c.json({ error: "Not found — this port only serves /mcp/<agent-slug>" }, 404));
+  app.all("*", (c) => c.json({ error: "Not found — this port only serves /mcp/<username>/<agent-slug>" }, 404));
   return app;
 }
 
@@ -55,6 +58,8 @@ function mountMcp(app: Hono, ctx: AppContext): void {
     }),
   );
   app.use("/mcp/*", mcpCors);
+  // Two segments are always username/agent; one is always the legacy form (the Default user's agent).
+  app.all("/mcp/:username/:agentSlug", mcpEndpointHandler(ctx));
   app.all("/mcp/:agentSlug", mcpEndpointHandler(ctx));
 }
 
@@ -70,15 +75,18 @@ export function createApp(ctx: AppContext, webDist: string, opts: { serveMcp?: b
     app.all("/mcp/*", (c) => c.json({ error: "The MCP endpoint is served on MCP_PORT" }, 404));
   }
 
-  // --- OAuth callback (arrives via the admin's browser redirect) ---
+  // --- OAuth callback (arrives via the owner's browser redirect, session cookie and all) ---
   app.get("/oauth/callback", async (c) => {
     const { code, state, error } = c.req.query();
     if (error) return c.redirect(`/servers?auth=failed&reason=${encodeURIComponent(error)}`);
     if (!code || !state) return c.redirect("/servers?auth=failed&reason=missing_code_or_state");
+    const user = await requestUser(c, ctx);
+    if (!user) return c.redirect("/servers?auth=failed&reason=not_signed_in");
 
     const cred = ctx.db.select().from(oauthCredentials).where(eq(oauthCredentials.pendingState, state)).get();
     if (!cred) return c.redirect("/servers?auth=failed&reason=unknown_state");
-    const server = ctx.db.select().from(servers).where(eq(servers.id, cred.serverId)).get();
+    // Only the owner completes it: the tokens become their server's credentials.
+    const server = userScope(ctx.db, user).servers.get(cred.serverId);
     if (!server?.url) return c.redirect("/servers?auth=failed&reason=server_missing");
 
     try {
@@ -97,17 +105,23 @@ export function createApp(ctx: AppContext, webDist: string, opts: { serveMcp?: b
   // --- Admin REST API ---
   const api = new Hono();
   api.route("/auth", authRoutes(ctx));
-  api.use("*", adminAuthMiddleware(ctx.adminSessions, () => isAuthDisabled(ctx)));
+  api.use("*", adminAuthMiddleware(ctx));
+  api.route("/users", userRoutes(ctx));
+  api.route("/servers/:id/shares", ownerShareRoutes(ctx));
   api.route("/servers", serverRoutes(ctx));
+  api.route("/shares", receivedShareRoutes(ctx));
+  api.route("/directory", directoryRoutes(ctx));
   api.route("/agents", agentRoutes(ctx));
   api.route("/logs", logRoutes(ctx));
   api.route("/requests", requestRoutes(ctx));
-  api.get("/status", (c) =>
-    c.json({
+  api.get("/status", (c) => {
+    const own = new Set(userScope(ctx.db, c.get("user")).servers.list().map((s) => s.id));
+    const all = ctx.manager.statusSummary();
+    return c.json({
       version: ctx.version,
-      servers: ctx.manager.statusSummary(),
-    }),
-  );
+      servers: Object.fromEntries(Object.entries(all).filter(([id]) => own.has(Number(id)))),
+    });
+  });
   app.route("/api", api);
   app.all("/api/*", (c) => c.json({ error: "Not found" }, 404));
 

@@ -70,8 +70,15 @@ export function verifyPkce(verifier: string, challenge: string): boolean {
 }
 
 /** Case, spaces and dashes don't matter when typing a pairing code back. */
-function normalizePairingCode(code: string): string {
+export function normalizePairingCode(code: string): string {
   return code.toUpperCase().replace(/[^A-Z0-9]/g, "");
+}
+
+/** A fresh 40-bit code in its typed form, `ABCD-EFGH`; setup codes are minted the same way. */
+export function newPairingCode(): string {
+  const bytes = crypto.randomBytes(8);
+  const raw = Array.from(bytes, (b) => PAIRING_ALPHABET[b % PAIRING_ALPHABET.length]).join("");
+  return `${raw.slice(0, 4)}-${raw.slice(4)}`;
 }
 
 export class AgentOAuthStore {
@@ -88,11 +95,10 @@ export class AgentOAuthStore {
   /* ---------- pairing codes ---------- */
 
   createPairingCode(agentId: number): { code: string; expiresAt: number } {
-    const bytes = crypto.randomBytes(8);
-    const raw = Array.from(bytes, (b) => PAIRING_ALPHABET[b % PAIRING_ALPHABET.length]).join("");
+    const code = newPairingCode();
     const expiresAt = Date.now() + PAIRING_TTL_MS;
-    this.pairing.set(sha256(raw), { agentId, expiresAt });
-    return { code: `${raw.slice(0, 4)}-${raw.slice(4)}`, expiresAt };
+    this.pairing.set(sha256(normalizePairingCode(code)), { agentId, expiresAt });
+    return { code, expiresAt };
   }
 
   /** The agent a pairing code was minted for, without spending it. */

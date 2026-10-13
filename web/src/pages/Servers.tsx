@@ -1,14 +1,15 @@
 import { useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "react-router";
-import { ArrowLeft, ChevronDown, ChevronUp, Plus } from "lucide-react";
+import { ArrowLeft, Check, ChevronDown, ChevronUp, Inbox, Plus, Share2, Users } from "lucide-react";
 import { toast } from "sonner";
 import { api } from "@/lib/api";
-import { useApiMutation, useServerLogs, useServers, useServerTools } from "@/lib/hooks";
+import { useApiMutation, useAuthMe, useDirectory, useServerLogs, useServers, useServerTools, useShares } from "@/lib/hooks";
 import { SERVER_TEMPLATES, templatePayload, templateReady, type ServerTemplate } from "@/lib/templates";
-import type { ServerInfo } from "@/lib/types";
+import type { OwnedShare, ReceivedShare, ServerInfo, ShareOffer } from "@/lib/types";
+import { cn, timeAgo } from "@/lib/utils";
 import { PageBar } from "@/components/Layout";
 import { ServerRequestsPanel } from "@/components/ServerRequests";
-import { StatusDot, statusInfo } from "@/components/StatusDot";
+import { receivedStatus, StatusDot, statusInfo } from "@/components/StatusDot";
 import { Badge, Button, CopyButton, Dialog, Field, Input, Select, Switch, Tabs, Textarea } from "@/components/ui";
 
 /* ---------- add / edit dialog ---------- */
@@ -24,6 +25,32 @@ interface ImportPreviewEntry {
   detectedAuth: "oauth" | "auth_required" | null;
   envKeys: string[];
   slugTaken: boolean;
+  /** A local command from someone who may not run one: saving files it for the Admin. */
+  needsApproval: boolean;
+}
+
+/** What a 202 says: the local command went to the Admin's queue instead of being created. */
+interface RequestedResponse {
+  requested: true;
+  requestId: number;
+  escalated: boolean;
+  message: string;
+}
+
+function wasRequested(res: unknown): res is RequestedResponse {
+  return typeof res === "object" && res !== null && (res as { requested?: unknown }).requested === true;
+}
+
+const SENT_TO_ADMIN = "Sent to the Admin for approval — it appears under your requests until they decide";
+
+function NeedsAdminNote({ plural }: { plural?: boolean }) {
+  return (
+    <p className="rounded-[10px] bg-warn-bg px-3 py-2 text-xs leading-relaxed text-muted-fg">
+      <b className="font-semibold text-foreground">Local commands need the Admin's approval.</b> Saving sends{" "}
+      {plural ? "them" : "this"} to the Admin instead of adding {plural ? "them" : "it"}; you can cancel from the Servers page
+      while it waits.
+    </p>
+  );
 }
 
 interface FormState {
@@ -81,6 +108,8 @@ function ServerDialog({
   editing: ServerInfo | null;
   takenSlugs: Set<string>;
 }) {
+  const { data: auth } = useAuthMe();
+  const canRunLocal = auth?.user?.canRunLocalCommands ?? true;
   const [view, setView] = useState<"picker" | "template" | "manual">("picker");
   const [template, setTemplate] = useState<ServerTemplate | null>(null);
   const [tSlug, setTSlug] = useState("");
@@ -151,30 +180,40 @@ function ServerDialog({
 
   const saveTemplate = useApiMutation(
     () =>
-      api<ServerInfo>("/api/servers", {
+      api<ServerInfo | RequestedResponse>("/api/servers", {
         method: "POST",
         json: templatePayload(template!, tSlug, tValues),
       }),
-    ["servers", "agents"],
+    ["servers", "agents", "requests"],
     (created) => {
       onClose();
-      if (created.authType === "oauth") void startOAuth(created.id);
+      if (wasRequested(created)) toast.info(SENT_TO_ADMIN);
+      else if (created.authType === "oauth") void startOAuth(created.id);
       else toast.success(`${created.name} added`);
     },
   );
 
   const doImport = useApiMutation(
     () =>
-      api<{ created: ServerInfo[]; errors: { name: string; error: string }[] }>("/api/servers/import", {
+      api<{
+        created: ServerInfo[];
+        errors: { name: string; error: string }[];
+        requested?: { name: string; slug: string; requestId: number }[];
+      }>("/api/servers/import", {
         method: "POST",
         json: { text: pasteText },
       }),
-    ["servers", "agents"],
+    ["servers", "agents", "requests"],
     (res) => {
       onClose();
       setPasteText("");
       if (res.created.length > 0) {
         toast.success(`Added ${res.created.length} server${res.created.length === 1 ? "" : "s"}`);
+      }
+      if (res.requested?.length) {
+        toast.info(
+          `${res.requested.length === 1 ? "1 local command" : `${res.requested.length} local commands`} sent to the Admin for approval`,
+        );
       }
       for (const e of res.errors) toast.error(`${e.name}: ${e.error}`);
       const oauthCreated = res.created.filter((s) => s.authType === "oauth");
@@ -210,15 +249,16 @@ function ServerDialog({
               ...(form.authType === "bearer" && form.bearerToken ? { bearerToken: form.bearerToken } : {}),
               ...(form.authType === "headers" && form.headers.trim() ? { headers: parseKv(form.headers) } : {}),
             };
-      return api<ServerInfo>(editing ? `/api/servers/${editing.id}` : "/api/servers", {
+      return api<ServerInfo | RequestedResponse>(editing ? `/api/servers/${editing.id}` : "/api/servers", {
         method: editing ? "PATCH" : "POST",
         json: payload,
       });
     },
-    ["servers"],
+    ["servers", "requests"],
     (created) => {
       onClose();
-      if (!editing && created.authType === "oauth") void startOAuth(created.id);
+      if (wasRequested(created)) toast.info(SENT_TO_ADMIN);
+      else if (!editing && created.authType === "oauth") void startOAuth(created.id);
       else toast.success(editing ? "Server updated" : "Server added");
     },
   );
@@ -302,6 +342,7 @@ function ServerDialog({
               <Input value={tSlug} onChange={(e) => setTSlug(e.target.value)} />
             </Field>
           </div>
+          {template.transport === "stdio" && !canRunLocal && <NeedsAdminNote />}
           {template.note && (
             <p className="rounded-[10px] bg-panel-2 px-3 py-2 text-xs leading-relaxed text-muted-fg">{template.note}</p>
           )}
@@ -356,6 +397,7 @@ function ServerDialog({
                     <Badge className="border-transparent bg-warn-bg font-semibold text-warn">needs a token</Badge>
                   )}
                   {p.slugTaken && <Badge className="border-transparent bg-warn-bg font-semibold text-warn">slug taken</Badge>}
+                  {p.needsApproval && <Badge className="border-transparent bg-warn-bg font-semibold text-warn">needs Admin approval</Badge>}
                 </div>
               ))}
             </div>
@@ -403,6 +445,7 @@ function ServerDialog({
             >
               <Textarea rows={2} value={form.env} onChange={(e) => set({ env: e.target.value })} placeholder="GITHUB_TOKEN=ghp_…" />
             </Field>
+            {!editing && !canRunLocal && <NeedsAdminNote />}
           </>
         ) : (
           <>
@@ -467,7 +510,7 @@ function ServerDialog({
               disabled={saveTemplate.isPending || !tSlug || !templateReady(template, tValues)}
               onClick={() => saveTemplate.mutate(undefined)}
             >
-              {template.authType === "oauth" ? "Add & authorize" : "Add server"}
+              {template.transport === "stdio" && !canRunLocal ? "Send to Admin" : template.authType === "oauth" ? "Add & authorize" : "Add server"}
             </Button>
           ) : form.kind === "paste" ? (
             <Button
@@ -475,7 +518,11 @@ function ServerDialog({
               disabled={doImport.isPending || preview.servers.length === 0 || preview.servers.every((p) => p.slugTaken)}
               onClick={() => doImport.mutate(undefined)}
             >
-              {preview.servers.length > 1 ? `Add ${preview.servers.length} servers` : "Add server"}
+              {preview.servers.length > 0 && preview.servers.every((p) => p.needsApproval)
+                ? "Send to Admin"
+                : preview.servers.length > 1
+                  ? `Add ${preview.servers.length} servers`
+                  : "Add server"}
             </Button>
           ) : (
             <Button
@@ -483,7 +530,13 @@ function ServerDialog({
               disabled={save.isPending || !form.name || (form.kind === "stdio" ? !form.command : !form.url)}
               onClick={() => save.mutate(undefined)}
             >
-              {editing ? "Save changes" : form.kind === "remote" && form.authType === "oauth" ? "Save & authorize" : "Add server"}
+              {editing
+                ? "Save changes"
+                : form.kind === "stdio" && !canRunLocal
+                  ? "Send to Admin"
+                  : form.kind === "remote" && form.authType === "oauth"
+                    ? "Save & authorize"
+                    : "Add server"}
             </Button>
           )}
         </div>
@@ -587,7 +640,19 @@ function ServerDetails({ server, onEdit }: { server: ServerInfo; onEdit: () => v
 
 /* ---------- row ---------- */
 
-function ServerRow({ server, onEdit }: { server: ServerInfo; onEdit: () => void }) {
+/** Names for the "shared with" badge: a couple, then a count. */
+function sharedWithLabel(shares: OwnedShare[]): string {
+  const names = shares.map((x) => x.username);
+  return names.length <= 2 ? names.join(", ") : `${names.slice(0, 2).join(", ")} +${names.length - 2}`;
+}
+
+function usageText(share: OwnedShare): string {
+  if (share.status === "offered") return "Offered · not accepted yet";
+  if (share.lastUsedAt === null) return "Accepted · not used yet";
+  return `${share.callCount} call${share.callCount === 1 ? "" : "s"} · last used ${timeAgo(share.lastUsedAt)}`;
+}
+
+function ServerRow({ server, onEdit, onShare }: { server: ServerInfo; onEdit: () => void; onShare: () => void }) {
   const [expanded, setExpanded] = useState(false);
   const status = statusInfo(server);
 
@@ -642,7 +707,18 @@ function ServerRow({ server, onEdit }: { server: ServerInfo; onEdit: () => void 
             added by {server.createdByAgentSlug}
           </Badge>
         )}
+        {server.sharedWith.length > 0 && (
+          <Badge
+            title={server.sharedWith.map((x) => `${x.username}: ${usageText(x)}`).join("\n")}
+            className="hidden sm:inline-flex"
+          >
+            <Users size={11} className="mr-1" /> shared with {sharedWithLabel(server.sharedWith)}
+          </Badge>
+        )}
         <Badge className="hidden md:inline-flex">{transportLabel}</Badge>
+        <Button size="sm" variant="ghost" onClick={onShare}>
+          <Share2 size={13} /> Share
+        </Button>
         {server.enabled && status.text === "Needs auth" ? (
           <Button size="sm" onClick={() => void startOAuth(server.id)}>
             Authorize
@@ -659,10 +735,223 @@ function ServerRow({ server, onEdit }: { server: ServerInfo; onEdit: () => void 
   );
 }
 
+/* ---------- sharing ---------- */
+
+/** Offer a server to another user. They use my connection and credentials; they never see the config. */
+function ShareDialog({ serverId, onClose }: { serverId: number | null; onClose: () => void }) {
+  const { data: servers } = useServers();
+  const { data: directory, isLoading } = useDirectory(serverId !== null);
+  const server = servers?.find((x) => x.id === serverId) ?? null;
+
+  const share = useApiMutation(
+    (username: string) => api(`/api/servers/${serverId}/shares`, { method: "POST", json: { username } }),
+    ["servers"],
+    () => toast.success("Offered — they'll see it on their Servers page"),
+  );
+  const revoke = useApiMutation(
+    (shareId: number) => api(`/api/servers/${serverId}/shares/${shareId}`, { method: "DELETE" }),
+    ["servers", "agents"],
+    () => toast.success("Revoked — their agents lost it immediately"),
+  );
+
+  return (
+    <Dialog
+      open={serverId !== null && server !== null}
+      onClose={onClose}
+      title={`Share ${server?.name ?? ""}`}
+      description="They use your connection and your credentials. They never see its config or secrets."
+    >
+      {isLoading ? (
+        <p className="py-4 text-center text-xs text-faint">Loading…</p>
+      ) : (directory ?? []).length === 0 ? (
+        <p className="rounded-[10px] bg-panel-2 px-3 py-3 text-xs leading-relaxed text-muted-fg">
+          There's nobody to share with yet. The Admin adds users on the Users page.
+        </p>
+      ) : (
+        <div className="divide-y divide-border-soft rounded-[10px] border border-border-soft">
+          {directory!.map(({ username }) => {
+            const existing = server?.sharedWith.find((x) => x.username === username);
+            return (
+              <div key={username} className="flex items-center gap-3 px-3 py-2.5">
+                <div className="min-w-0 flex-1">
+                  <div className="text-[13px] font-semibold">{username}</div>
+                  <div className="text-xs text-faint">{existing ? usageText(existing) : "Not shared"}</div>
+                </div>
+                {existing ? (
+                  <Button
+                    size="sm"
+                    variant="danger"
+                    disabled={revoke.isPending}
+                    onClick={() => {
+                      if (existing.status === "offered" || confirm(`Revoke ${username}'s access to ${server!.name}? Their agents lose it immediately.`)) {
+                        revoke.mutate(existing.id);
+                      }
+                    }}
+                  >
+                    Revoke
+                  </Button>
+                ) : (
+                  <Button size="sm" disabled={share.isPending} onClick={() => share.mutate(username)}>
+                    Share
+                  </Button>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </Dialog>
+  );
+}
+
+/** A share someone offered me: pick the name my agents will see, then accept or decline. */
+function OfferCard({ offer }: { offer: ShareOffer }) {
+  const [alias, setAlias] = useState(offer.proposedAlias);
+  const accept = useApiMutation(
+    () => api(`/api/shares/${offer.id}/accept`, { method: "POST", json: { alias: alias.trim() } }),
+    ["shares", "agents"],
+    () => toast.success(`Accepted — switch ${alias.trim()} on for an agent on the Agents page`),
+  );
+  const decline = useApiMutation(
+    () => api(`/api/shares/${offer.id}/decline`, { method: "POST" }),
+    ["shares"],
+  );
+  const busy = accept.isPending || decline.isPending;
+
+  return (
+    <div className="flex flex-wrap items-center gap-3 rounded-[12px] border border-primary/40 bg-primary-soft px-4 py-3">
+      <Inbox size={15} className="shrink-0 text-primary" />
+      <div className="min-w-0 flex-1 text-[13px]" title={offer.description ?? undefined}>
+        <b className="font-semibold">{offer.ownerUsername}</b> shared <b className="font-semibold">{offer.serverName}</b> with you
+        <div className="truncate text-xs text-faint">
+          Your agents will see its tools as <code className="font-mono">{alias.trim() || "…"}__…</code>
+        </div>
+      </div>
+      <Input
+        className="w-40 font-mono text-xs"
+        value={alias}
+        onChange={(e) => setAlias(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" && alias.trim() && !busy) accept.mutate(undefined);
+        }}
+        aria-label={`Alias for ${offer.serverName}`}
+      />
+      <Button size="sm" variant="primary" disabled={busy || !alias.trim()} onClick={() => accept.mutate(undefined)}>
+        <Check size={13} /> Accept
+      </Button>
+      <Button size="sm" variant="ghost" disabled={busy} onClick={() => decline.mutate(undefined)}>
+        Decline
+      </Button>
+    </div>
+  );
+}
+
+/** A server someone shared with me. Mine to rename, switch off or remove; never to edit. */
+function ReceivedRow({ share }: { share: ReceivedShare }) {
+  const status = receivedStatus(share);
+  const [renaming, setRenaming] = useState(false);
+  const [draft, setDraft] = useState(share.alias);
+
+  const toggle = useApiMutation(
+    (enabled: boolean) => api(`/api/shares/${share.id}`, { method: "PATCH", json: { enabled } }),
+    ["shares", "agents"],
+  );
+  const rename = useApiMutation(
+    () => api(`/api/shares/${share.id}`, { method: "PATCH", json: { alias: draft.trim() } }),
+    ["shares", "agents"],
+    () => {
+      setRenaming(false);
+      toast.success("Renamed — live agents pick up the new tool names");
+    },
+  );
+  const remove = useApiMutation(
+    () => api(`/api/shares/${share.id}`, { method: "DELETE" }),
+    ["shares", "agents"],
+    () => toast.success("Removed"),
+  );
+
+  return (
+    <div className={cn("flex items-center gap-3.5 bg-panel-2/40 px-4 py-3", !share.enabled && "opacity-70")}>
+      <StatusDot tone={status.tone} />
+      <div className="min-w-0 flex-1">
+        {renaming ? (
+          <form
+            className="flex items-center gap-2"
+            onSubmit={(e) => {
+              e.preventDefault();
+              if (draft.trim() && draft.trim() !== share.alias) rename.mutate(undefined);
+              else setRenaming(false);
+            }}
+          >
+            <Input
+              autoFocus
+              className="w-44 text-xs"
+              value={draft}
+              onChange={(e) => setDraft(e.target.value)}
+              onKeyDown={(e) => e.key === "Escape" && setRenaming(false)}
+              aria-label="Alias"
+            />
+            <Button size="sm" variant="primary" type="submit" disabled={rename.isPending}>
+              Save
+            </Button>
+            <Button size="sm" variant="ghost" type="button" onClick={() => setRenaming(false)}>
+              Cancel
+            </Button>
+          </form>
+        ) : (
+          <>
+            <span className="font-mono text-[13px] font-semibold">{share.alias}</span>
+            <div className="truncate text-xs text-faint" title={share.description ?? undefined}>
+              <span
+                className={
+                  status.tone === "ok" ? "font-medium text-ok" : status.tone === "warn" ? "font-medium text-warn" : undefined
+                }
+              >
+                {status.text}
+              </span>
+              {" · "}
+              {share.serverName} · {status.sub}
+            </div>
+          </>
+        )}
+      </div>
+      <Badge className="border-primary/40 text-primary" title={`${share.ownerUsername} owns this server and its credentials`}>
+        from {share.ownerUsername}
+      </Badge>
+      {!renaming && (
+        <Button
+          size="sm"
+          variant="ghost"
+          onClick={() => {
+            setDraft(share.alias);
+            setRenaming(true);
+          }}
+        >
+          Rename
+        </Button>
+      )}
+      <Button
+        size="sm"
+        variant="ghost"
+        onClick={() => {
+          if (confirm(`Remove "${share.alias}"? Your agents lose its tools. ${share.ownerUsername} would have to share it again.`)) {
+            remove.mutate(undefined);
+          }
+        }}
+      >
+        Remove
+      </Button>
+      <Switch checked={share.enabled} onChange={(v) => toggle.mutate(v)} label={`Use ${share.alias} for my agents`} />
+    </div>
+  );
+}
+
 /* ---------- page ---------- */
 
 export function ServersPage() {
   const { data: servers, isLoading } = useServers();
+  const { data: shares } = useShares();
+  const [sharingId, setSharingId] = useState<number | null>(null);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editing, setEditing] = useState<ServerInfo | null>(null);
   const [searchParams, setSearchParams] = useSearchParams();
@@ -680,11 +969,18 @@ export function ServersPage() {
     [servers],
   );
 
+  const offers = shares?.offers ?? [];
+  const received = shares?.accepted ?? [];
+
   return (
     <>
       <PageBar
         title="Servers"
-        sub={servers ? `${servers.length} configured · ${healthy} healthy` : undefined}
+        sub={
+          servers
+            ? `${servers.length} yours · ${healthy} healthy${received.length > 0 ? ` · ${received.length} shared with you` : ""}`
+            : undefined
+        }
         action={
           <Button
             variant="primary"
@@ -698,27 +994,41 @@ export function ServersPage() {
         }
       />
       <ServerRequestsPanel />
+      {offers.length > 0 && (
+        <div className="mb-4 flex flex-col gap-2">
+          {offers.map((offer) => (
+            <OfferCard key={offer.id} offer={offer} />
+          ))}
+        </div>
+      )}
       <div className="divide-y divide-border-soft rounded-[14px] border border-border bg-panel">
         {isLoading ? (
           <p className="px-4 py-8 text-center text-sm text-faint">Loading…</p>
-        ) : (servers ?? []).length === 0 ? (
+        ) : (servers ?? []).length === 0 && received.length === 0 ? (
           <div className="px-4 py-10 text-center">
             <p className="text-sm font-medium">No servers yet</p>
             <p className="mt-1 text-xs text-faint">Add your first MCP server — local command or remote URL.</p>
           </div>
         ) : (
-          servers!.map((s) => (
-            <ServerRow
-              key={s.id}
-              server={s}
-              onEdit={() => {
-                setEditing(s);
-                setDialogOpen(true);
-              }}
-            />
-          ))
+          <>
+            {(servers ?? []).map((s) => (
+              <ServerRow
+                key={s.id}
+                server={s}
+                onShare={() => setSharingId(s.id)}
+                onEdit={() => {
+                  setEditing(s);
+                  setDialogOpen(true);
+                }}
+              />
+            ))}
+            {received.map((share) => (
+              <ReceivedRow key={share.id} share={share} />
+            ))}
+          </>
         )}
       </div>
+      <ShareDialog serverId={sharingId} onClose={() => setSharingId(null)} />
       <ServerDialog
         open={dialogOpen}
         onClose={() => setDialogOpen(false)}

@@ -1,26 +1,18 @@
-import { and, eq } from "drizzle-orm";
 import type { Db } from "../db/index.js";
-import {
-  agentServers,
-  agents,
-  oauthCredentials,
-  serverRequests,
-  servers,
-  type ServerRequestRow,
-  type ServerRow,
-} from "../db/schema.js";
-import { decrypt, encrypt } from "../lib/crypto.js";
+import type { ServerRequestRow, ServerRow } from "../db/schema.js";
+import { decrypt } from "../lib/crypto.js";
 import { probeAuth, type ProbeResult } from "../lib/authProbe.js";
 import type { ParsedServer } from "../lib/importParser.js";
-import { readSetting } from "../lib/settings.js";
-import { isReservedSlug, isValidSlug, slugify } from "../lib/slug.js";
 import type { ChangedKind } from "./upstreamConnection.js";
 import type { UpstreamManager } from "./upstreamManager.js";
+import type { NewServer, NewServerRequest, ScopeError, UserScope } from "./userScope.js";
 
 /**
  * The slice of the app the mutating actions need. Deliberately narrower than
  * `AppContext`: the agent-facing meta-tools reach these through
  * `AgentServerDeps`, which cannot see the hub (the hub builds agent servers).
+ *
+ * Whose data an action touches is never in here: every action takes the `UserScope` it acts in.
  */
 export interface AdminDeps {
   db: Db;
@@ -33,78 +25,12 @@ export interface AdminDeps {
   probe?: (url: string) => Promise<ProbeResult>;
 }
 
-export interface InsertServerInput {
-  name: string;
-  slug?: string;
-  description?: string | null;
-  type: "stdio" | "http" | "sse";
-  enabled?: boolean;
-  // stdio
-  command?: string;
-  args?: string[];
-  env?: Record<string, string>;
-  cwd?: string | null;
-  // remote
-  url?: string;
-  authType?: "none" | "bearer" | "headers" | "oauth";
-  bearerToken?: string;
-  headers?: Record<string, string>;
-  createdByAgentSlug?: string | null;
-}
-
-export type InsertServerResult = { row: ServerRow } | { error: string; status: 400 | 409 };
+export type InsertServerInput = NewServer;
+export type InsertServerResult = { row: ServerRow } | ScopeError;
 
 /** Shared by the REST create/import routes and the management meta-tools. Does NOT reconcile — callers do that once. */
-export function insertServer(deps: AdminDeps, input: InsertServerInput): InsertServerResult {
-  const slug = input.slug ?? slugify(input.name);
-  if (!isValidSlug(slug)) {
-    return { error: "Slug must be 1-64 chars of a-z, 0-9, and dashes (no underscores)", status: 400 };
-  }
-  if (isReservedSlug(slug)) {
-    return { error: `Slug "${slug}" is reserved for the switchboard's own tools`, status: 400 };
-  }
-  if (deps.db.select().from(servers).where(eq(servers.slug, slug)).get()) {
-    return { error: `Slug "${slug}" is already in use`, status: 409 };
-  }
-  if (input.type === "stdio" && !input.command) return { error: "Local servers need a command", status: 400 };
-  if (input.type !== "stdio" && !input.url) return { error: "Remote servers need a URL", status: 400 };
-
-  const now = Date.now();
-  const row = deps.db
-    .insert(servers)
-    .values({
-      slug,
-      name: input.name,
-      description: input.description ?? null,
-      type: input.type,
-      enabled: input.enabled ?? true,
-      command: input.command ?? null,
-      argsJson: input.args ? JSON.stringify(input.args) : null,
-      envJsonEnc: input.env && Object.keys(input.env).length > 0 ? encrypt(JSON.stringify(input.env)) : null,
-      cwd: input.cwd ?? null,
-      url: input.url ?? null,
-      authType: input.type === "stdio" ? "none" : (input.authType ?? "none"),
-      bearerTokenEnc: input.bearerToken ? encrypt(input.bearerToken) : null,
-      headersJsonEnc:
-        input.headers && Object.keys(input.headers).length > 0 ? encrypt(JSON.stringify(input.headers)) : null,
-      createdByAgentSlug: input.createdByAgentSlug ?? null,
-      createdAt: now,
-      updatedAt: now,
-    })
-    .returning()
-    .get();
-
-  if (row.authType === "oauth") {
-    deps.db.insert(oauthCredentials).values({ serverId: row.id, status: "needs_auth", updatedAt: now }).run();
-  }
-
-  // Optional convenience (Settings → General): new servers start enabled for every agent.
-  if (readSetting(deps.db, "autoEnableNewServers") === "1") {
-    for (const agent of deps.db.select({ id: agents.id }).from(agents).all()) {
-      deps.db.insert(agentServers).values({ agentId: agent.id, serverId: row.id, enabled: true }).run();
-    }
-  }
-  return { row };
+export function insertServer(scope: UserScope, input: InsertServerInput): InsertServerResult {
+  return scope.servers.create(input);
 }
 
 /**
@@ -122,16 +48,17 @@ export async function detectAuth(
 
 export interface AddServersOptions {
   createdByAgentSlug?: string;
-  /** Agents to flip on in the matrix for every server that gets created. */
+  /** The owner's agents to flip on in the matrix for every server that gets created. */
   enableForAgentIds?: number[];
 }
 
 /**
- * Create servers from parsed configs: OAuth upgrade, insert, one reconcile,
- * matrix rows, then `list_changed` for every agent whose toolset just grew.
+ * Create servers owned by `scope`'s user from parsed configs: OAuth upgrade, insert, one
+ * reconcile, matrix rows, then `list_changed` for every agent whose toolset just grew.
  */
 export async function addServers(
   deps: AdminDeps,
+  scope: UserScope,
   parsed: ParsedServer[],
   opts: AddServersOptions = {},
 ): Promise<InsertServerResult[]> {
@@ -143,66 +70,81 @@ export async function addServers(
   }
 
   const results = parsed.map((p) =>
-    insertServer(deps, { enabled: true, ...p, createdByAgentSlug: opts.createdByAgentSlug }),
+    insertServer(scope, { enabled: true, ...p, createdByAgentSlug: opts.createdByAgentSlug }),
   );
   const created = results.flatMap((r) => ("row" in r ? [r.row] : []));
   if (created.length > 0) await (deps.reconcile ? deps.reconcile() : deps.manager.reconcile());
 
   for (const agentId of opts.enableForAgentIds ?? []) {
-    for (const row of created) upsertMatrix(deps, agentId, row.id, true);
-    if (created.length > 0) deps.notifyAgent?.(agentId);
+    const switched = created.filter((row) => scope.matrix.set(agentId, row.id, true));
+    if (switched.length > 0) deps.notifyAgent?.(agentId);
   }
   return results;
 }
 
-function upsertMatrix(deps: AdminDeps, agentId: number, serverId: number, enabled: boolean): void {
-  const existing = deps.db
-    .select()
-    .from(agentServers)
-    .where(and(eq(agentServers.agentId, agentId), eq(agentServers.serverId, serverId)))
-    .get();
-  if (existing) {
-    deps.db
-      .update(agentServers)
-      .set({ enabled })
-      .where(and(eq(agentServers.agentId, agentId), eq(agentServers.serverId, serverId)))
-      .run();
-  } else {
-    deps.db.insert(agentServers).values({ agentId, serverId, enabled }).run();
-  }
-}
-
-/** Flip one matrix cell. Live sessions of this agent see the change immediately. */
-export function setMatrix(deps: AdminDeps, agentId: number, serverId: number, enabled: boolean): void {
-  upsertMatrix(deps, agentId, serverId, enabled);
+/**
+ * Flip one matrix cell. Live sessions of this agent see the change immediately. False when the
+ * agent or the server isn't `scope`'s user's to link.
+ */
+export function setMatrix(
+  deps: AdminDeps,
+  scope: UserScope,
+  agentId: number,
+  serverId: number,
+  enabled: boolean,
+): boolean {
+  if (!scope.matrix.set(agentId, serverId, enabled)) return false;
   deps.notifyAgent?.(agentId);
+  return true;
 }
 
-export interface FileRequestInput {
-  agentId: number | null;
-  agentSlug: string;
-  kind: "add_server" | "freeform";
-  /** The exact config the admin will approve; null for a freeform ask. */
-  payload?: ParsedServer | null;
-  reason?: string | null;
+export type FileRequestInput = NewServerRequest;
+
+/**
+ * Park an ask in the owner's approval queue — or the Admin's, for a local command the owner
+ * can't run. Returns the request id to quote back, and whether it went to the Admin.
+ */
+export function fileServerRequest(scope: UserScope, input: FileRequestInput): { id: number; escalated: boolean } {
+  return scope.requests.file(input);
 }
 
-/** Park an agent's ask in the approval queue. Returns the request id to quote back to the agent. */
-export function fileServerRequest(deps: AdminDeps, input: FileRequestInput): number {
-  return deps.db
-    .insert(serverRequests)
-    .values({
-      requestedByAgentId: input.agentId,
-      requestedByAgentSlug: input.agentSlug,
-      kind: input.kind,
-      // Encrypted at rest: a pasted config can carry env values and bearer tokens.
-      payloadJsonEnc: input.payload ? encrypt(JSON.stringify(input.payload)) : null,
-      reason: input.reason ?? null,
-      status: "pending",
-      createdAt: Date.now(),
-    })
-    .returning({ id: serverRequests.id })
-    .get().id;
+/**
+ * Approve an `add_server` request in its requester's scope: the server is created owned by the
+ * requester, with the payload's values, and switched on for the requesting agent. Who may
+ * approve (the requester, or the Admin for an escalated one) is the caller's check.
+ */
+export async function approveServerRequest(
+  deps: AdminDeps,
+  requester: UserScope,
+  id: number,
+): Promise<InsertServerResult> {
+  const row = requester.requests.get(id);
+  if (!row) return { error: "Not found", status: 404 };
+  if (row.status !== "pending") return { error: "Request already resolved", status: 409 };
+  if (row.kind !== "add_server") {
+    return {
+      error: "Freeform requests can't be auto-executed — deny with a note, or add the server manually",
+      status: 400,
+    };
+  }
+  const payload = requestPayload(row);
+  if (!payload) return { error: "Request has no stored config", status: 400 };
+
+  // The requester, if it is still around. The slug fallback stays inside the requester's own agents.
+  const agent =
+    (row.requestedByAgentId !== null ? requester.agents.get(row.requestedByAgentId) : undefined) ??
+    (row.requestedByAgentSlug ? requester.agents.bySlug(row.requestedByAgentSlug) : undefined);
+
+  // Same executor the UI import uses: insert → reconcile → matrix → list_changed,
+  // so the requesting agent's live session grows its toolset on approval.
+  const [result] = await addServers(deps, requester, [payload], {
+    createdByAgentSlug: row.requestedByAgentSlug || undefined,
+    enableForAgentIds: agent ? [agent.id] : [],
+  });
+  // Left pending on failure (e.g. the slug got taken since) so it can be retried or denied.
+  if ("error" in result) return result;
+  requester.requests.resolve(id, { status: "approved" });
+  return result;
 }
 
 export function requestPayload(row: ServerRequestRow): ParsedServer | null {
@@ -215,6 +157,7 @@ export interface RequestServerSummary {
   type: "stdio" | "http" | "sse";
   command: string | null;
   args: string[];
+  cwd: string | null;
   url: string | null;
   authType: ParsedServer["authType"];
   envKeys: string[];
@@ -233,6 +176,7 @@ export function requestServerSummary(row: ServerRequestRow): RequestServerSummar
     type: payload.type,
     command: payload.command ?? null,
     args: payload.args ?? [],
+    cwd: payload.cwd ?? null,
     url: payload.url ?? null,
     authType: payload.authType,
     envKeys: payload.env ? Object.keys(payload.env) : [],

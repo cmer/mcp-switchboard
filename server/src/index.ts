@@ -11,6 +11,7 @@ import { TokenRefresher } from "./core/tokenRefresher.js";
 import { UpstreamManager } from "./core/upstreamManager.js";
 import { AgentOAuthStore } from "./oauth/agentOAuth.js";
 import { DbOAuthProvider } from "./oauth/dbOAuthProvider.js";
+import { runCli, processCliIo } from "./cli.js";
 import { AdminSessionStore } from "./http/adminAuth.js";
 import { createApp, createMcpApp } from "./http/app.js";
 import type { AppContext } from "./http/context.js";
@@ -117,7 +118,13 @@ async function main(): Promise<void> {
   process.on("SIGTERM", () => void shutdown());
 }
 
-main().catch((err) => {
-  console.error("Fatal:", err);
-  process.exit(1);
-});
+// Any argument means a subcommand (reset-password, login-mode, --help); bare, it starts the server.
+const args = process.argv.slice(2);
+if (args.length > 0) {
+  runCli(args, processCliIo()).then((code) => process.exit(code));
+} else {
+  main().catch((err) => {
+    console.error("Fatal:", err);
+    process.exit(1);
+  });
+}

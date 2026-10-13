@@ -1,52 +1,31 @@
-import { and, eq, lt } from "drizzle-orm";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import type { JSONRPCMessage } from "@modelcontextprotocol/sdk/types.js";
 import type { Db } from "../db/index.js";
-import { requestLogs, type AgentRow, type RequestLogRow } from "../db/schema.js";
-import { readBoolSetting, readNumberSetting } from "../lib/settings.js";
+import type { AgentRow, RequestLogRow } from "../db/schema.js";
+import { readNumberSetting } from "../lib/settings.js";
+import { agentReach } from "./agentReach.js";
+import { markInterruptedLogs, pruneLogs } from "./systemView.js";
+import { userScope, type LogSummary, type UserScope } from "./userScope.js";
 import { parseNsName, parseNsResourceUri } from "./namespace.js";
 import { META_TOOL_CALL_TOOL, META_TOOL_PREFIX } from "./agentServerFactory.js";
 
+/** Instance-wide (Admin). Whether payloads are captured is per user: `USER_SETTING_KEYS.capturePayloads`. */
 export const LOG_SETTING_KEYS = {
   retentionHours: "logs.retentionHours",
-  capturePayloads: "logs.capturePayloads",
   maxPayloadKb: "logs.maxPayloadKb",
 } as const;
 
 export const LOG_DEFAULTS = {
   retentionHours: 48,
-  capturePayloads: true,
   maxPayloadKb: 32,
 };
 
 export interface LogConfig {
   retentionHours: number;
-  capturePayloads: boolean;
   maxPayloadKb: number;
 }
 
-/** The columns the list view and the live stream need — payloads are fetched per row on expand. */
-export const LOG_SUMMARY_COLUMNS = {
-  id: requestLogs.id,
-  ts: requestLogs.ts,
-  agentId: requestLogs.agentId,
-  agentSlug: requestLogs.agentSlug,
-  agentName: requestLogs.agentName,
-  serverSlug: requestLogs.serverSlug,
-  method: requestLogs.method,
-  target: requestLogs.target,
-  summary: requestLogs.summary,
-  status: requestLogs.status,
-  durationMs: requestLogs.durationMs,
-  errorCode: requestLogs.errorCode,
-  errorMessage: requestLogs.errorMessage,
-  requestBytes: requestLogs.requestBytes,
-  responseBytes: requestLogs.responseBytes,
-} as const;
-
-export type LogSummary = {
-  [K in keyof typeof LOG_SUMMARY_COLUMNS]: RequestLogRow[K];
-};
+export { LOG_SUMMARY_COLUMNS, type LogSummary } from "./userScope.js";
 
 export type LogEvent = { type: "insert" | "update"; row: LogSummary };
 
@@ -150,6 +129,9 @@ function describeResult(method: string, result: Json): { summary: string | null;
 
 interface Pending {
   logId: number;
+  /** The calling agent's owner, whose capture setting also governs the response payload. */
+  userId: number;
+  scope: UserScope;
   startedAt: number;
   method: string;
 }
@@ -160,7 +142,8 @@ interface Pending {
  * onto whatever is already there) and `send` is wrapped in place.
  */
 export class RequestLogger {
-  private subscribers = new Set<(event: LogEvent) => void>();
+  /** Each live tail belongs to one user and only ever hears about that user's rows. */
+  private subscribers = new Map<(event: LogEvent) => void, number>();
   private cfg: LogConfig;
   private timer: NodeJS.Timeout | null = null;
 
@@ -171,7 +154,6 @@ export class RequestLogger {
   private readConfig(): LogConfig {
     return {
       retentionHours: readNumberSetting(this.db, LOG_SETTING_KEYS.retentionHours, LOG_DEFAULTS.retentionHours),
-      capturePayloads: readBoolSetting(this.db, LOG_SETTING_KEYS.capturePayloads, LOG_DEFAULTS.capturePayloads),
       maxPayloadKb: readNumberSetting(this.db, LOG_SETTING_KEYS.maxPayloadKb, LOG_DEFAULTS.maxPayloadKb),
     };
   }
@@ -186,16 +168,18 @@ export class RequestLogger {
     return this.cfg;
   }
 
-  subscribe(fn: (event: LogEvent) => void): () => void {
-    this.subscribers.add(fn);
+  subscribe(userId: number, fn: (event: LogEvent) => void): () => void {
+    this.subscribers.set(fn, userId);
     return () => this.subscribers.delete(fn);
   }
 
-  private emit(type: LogEvent["type"], id: number): void {
+  private emit(type: LogEvent["type"], scope: UserScope, id: number): void {
     if (this.subscribers.size === 0) return;
-    const row = this.db.select(LOG_SUMMARY_COLUMNS).from(requestLogs).where(eq(requestLogs.id, id)).get();
+    const row = scope.logs.summary(id);
     if (!row) return;
-    for (const fn of this.subscribers) {
+    const userId = scope.user.id;
+    for (const [fn, subscriber] of this.subscribers) {
+      if (subscriber !== userId) continue;
       try {
         fn({ type, row });
       } catch {
@@ -204,9 +188,14 @@ export class RequestLogger {
     }
   }
 
-  private payload(text: string): { json: string | null; bytes: number; truncated: boolean } {
+  /** Read per frame, so the owner's toggle applies to sessions that are already live. */
+  capturePayloads(userId: number): boolean {
+    return userScope(this.db, userId).settings.get("capturePayloads");
+  }
+
+  private payload(text: string, userId: number): { json: string | null; bytes: number; truncated: boolean } {
     const bytes = Buffer.byteLength(text, "utf8");
-    if (!this.cfg.capturePayloads) return { json: null, bytes, truncated: false };
+    if (!this.capturePayloads(userId)) return { json: null, bytes, truncated: false };
     const max = Math.max(1, this.cfg.maxPayloadKb) * 1024;
     return bytes <= max
       ? { json: text, bytes, truncated: false }
@@ -216,10 +205,12 @@ export class RequestLogger {
   /** Wrap one agent session's transport. Must run before `server.connect(transport)`. */
   attach(agent: AgentRow, transport: Transport): void {
     const pending = new Map<string, Pending>();
+    // Rows belong to the calling agent's owner: written through their scope, seen only in their logs.
+    const scope = userScope(this.db, agent.userId);
 
     transport.onmessage = (message) => {
       try {
-        this.recordInbound(agent, transport, message, pending);
+        this.recordInbound(agent, scope, transport, message, pending);
       } catch {
         // logging must never take down a live session
       }
@@ -236,8 +227,22 @@ export class RequestLogger {
     };
   }
 
+  /**
+   * The server behind the name the agent used, through its reach, so attribution survives aliases
+   * and renames. Null when the name reaches nothing (the call itself fails the same way).
+   */
+  private serverIdFor(agent: AgentRow, name: string | null): number | null {
+    if (name === null) return null;
+    try {
+      return agentReach(this.db, agent).find(name)?.serverId ?? null;
+    } catch {
+      return null;
+    }
+  }
+
   private recordInbound(
     agent: AgentRow,
+    scope: UserScope,
     transport: Transport,
     message: JSONRPCMessage,
     pending: Map<string, Pending>,
@@ -245,57 +250,57 @@ export class RequestLogger {
     const now = Date.now();
     if (isRequest(message)) {
       const { target, serverSlug, summary } = describeRequest(message.method, message.params);
-      const req = this.payload(JSON.stringify(message));
-      const row = this.db
-        .insert(requestLogs)
-        .values({
-          ts: now,
-          agentId: agent.id,
-          agentSlug: agent.slug,
-          agentName: agent.name,
-          serverSlug,
-          sessionId: transport.sessionId ?? null,
-          rpcId: String(message.id),
-          method: message.method,
-          target,
-          summary,
-          status: "pending",
-          requestJson: req.json,
-          requestBytes: req.bytes,
-          truncated: req.truncated,
-        })
-        .returning({ id: requestLogs.id })
-        .get();
-      pending.set(String(message.id), { logId: row.id, startedAt: now, method: message.method });
-      this.emit("insert", row.id);
+      const req = this.payload(JSON.stringify(message), agent.userId);
+      const id = scope.logs.record({
+        ts: now,
+        agentId: agent.id,
+        agentSlug: agent.slug,
+        agentName: agent.name,
+        serverId: this.serverIdFor(agent, serverSlug),
+        serverSlug,
+        sessionId: transport.sessionId ?? null,
+        rpcId: String(message.id),
+        method: message.method,
+        target,
+        summary,
+        status: "pending",
+        requestJson: req.json,
+        requestBytes: req.bytes,
+        truncated: req.truncated,
+      });
+      pending.set(String(message.id), {
+        logId: id,
+        userId: agent.userId,
+        scope,
+        startedAt: now,
+        method: message.method,
+      });
+      this.emit("insert", scope, id);
       return;
     }
 
     if (isNotification(message)) {
       const { target, serverSlug, summary } = describeRequest(message.method, message.params);
-      const req = this.payload(JSON.stringify(message));
-      const row = this.db
-        .insert(requestLogs)
-        .values({
-          ts: now,
-          agentId: agent.id,
-          agentSlug: agent.slug,
-          agentName: agent.name,
-          serverSlug,
-          sessionId: transport.sessionId ?? null,
-          rpcId: null,
-          method: message.method,
-          target,
-          summary,
-          status: "ok",
-          durationMs: 0,
-          requestJson: req.json,
-          requestBytes: req.bytes,
-          truncated: req.truncated,
-        })
-        .returning({ id: requestLogs.id })
-        .get();
-      this.emit("insert", row.id);
+      const req = this.payload(JSON.stringify(message), agent.userId);
+      const id = scope.logs.record({
+        ts: now,
+        agentId: agent.id,
+        agentSlug: agent.slug,
+        agentName: agent.name,
+        serverId: this.serverIdFor(agent, serverSlug),
+        serverSlug,
+        sessionId: transport.sessionId ?? null,
+        rpcId: null,
+        method: message.method,
+        target,
+        summary,
+        status: "ok",
+        durationMs: 0,
+        requestJson: req.json,
+        requestBytes: req.bytes,
+        truncated: req.truncated,
+      });
+      this.emit("insert", scope, id);
     }
   }
 
@@ -306,7 +311,7 @@ export class RequestLogger {
     if (!entry) return;
     pending.delete(key);
 
-    const res = this.payload(JSON.stringify(message));
+    const res = this.payload(JSON.stringify(message), entry.userId);
     const patch: Partial<RequestLogRow> = {
       durationMs: Date.now() - entry.startedAt,
       responseJson: res.json,
@@ -329,8 +334,8 @@ export class RequestLogger {
       }
     }
 
-    this.db.update(requestLogs).set(patch).where(eq(requestLogs.id, entry.logId)).run();
-    this.emit("update", entry.logId);
+    entry.scope.logs.complete(entry.logId, patch);
+    this.emit("update", entry.scope, entry.logId);
   }
 
   startGc(): void {
@@ -354,21 +359,12 @@ export class RequestLogger {
    * With no age given, every pending row qualifies.
    */
   private markInterrupted(olderThanMs?: number): void {
-    const stale = olderThanMs === undefined ? undefined : lt(requestLogs.ts, Date.now() - olderThanMs);
-    this.db
-      .update(requestLogs)
-      .set({ status: "error", errorMessage: "Interrupted — no response was sent" })
-      .where(and(eq(requestLogs.status, "pending"), stale))
-      .run();
+    markInterruptedLogs(this.db, olderThanMs);
   }
 
   prune(): number {
     const hours = Math.max(1, this.cfg.retentionHours);
     const cutoff = Date.now() - hours * 60 * 60 * 1000;
-    return this.db.delete(requestLogs).where(lt(requestLogs.ts, cutoff)).run().changes;
-  }
-
-  clear(): number {
-    return this.db.delete(requestLogs).run().changes;
+    return pruneLogs(this.db, cutoff);
   }
 }
