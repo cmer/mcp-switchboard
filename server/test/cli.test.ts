@@ -6,10 +6,12 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { closeDb, initDb, type Db } from "../src/db/index.js";
 import { adminSessions, users } from "../src/db/schema.js";
 import { runCli, resetPassword, setLoginMode, USAGE, type CliIo } from "../src/cli.js";
+import { spawnSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
 import { issueSetupCode } from "../src/core/setupCodes.js";
 import { createUser, defaultUserId, getUserByUsername } from "../src/core/users.js";
 import { hashPassword, loadOrCreateKey, verifyPassword } from "../src/lib/crypto.js";
-import { readLoginMode, readSetting, writeSetting } from "../src/lib/settings.js";
+import { readAccessSettings, readLoginMode, readSetting, writeSetting } from "../src/lib/settings.js";
 
 let tmp: string;
 let db: Db;
@@ -19,6 +21,8 @@ let closed: number;
 
 function io(overrides: Partial<CliIo> = {}): CliIo {
   return {
+    version: "9.9.9-test",
+    dataDir: tmp,
     out: (m) => out.push(m),
     err: (m) => err.push(m),
     interactive: false,
@@ -87,6 +91,31 @@ describe("reset-password", () => {
     expect(closed).toBe(1);
   });
 
+  it("works end to end from a real piped stdin, beside an open database", () => {
+    // What `printf '%s' "$PW" | docker compose exec -T switchboard node dist/index.js reset-password admin --password-stdin` runs.
+    const entry = fileURLToPath(new URL("../src/index.ts", import.meta.url));
+    const run = (input: string, ...args: string[]) =>
+      spawnSync(process.execPath, ["--import", "tsx", entry, ...args], {
+        input,
+        encoding: "utf8",
+        env: { ...process.env, DATA_DIR: tmp },
+        cwd: path.dirname(path.dirname(entry)),
+        timeout: 30_000,
+      });
+
+    const reset = run("piped-no-newline", "reset-password", "admin", "--password-stdin");
+    expect(reset.status, reset.stderr).toBe(0);
+    expect(verifyPassword("piped-no-newline", getUserByUsername(db, "admin")!.passwordHash!)).toBe(true);
+
+    const status = run("", "status", "--json");
+    expect(status.status, status.stderr).toBe(0);
+    expect(JSON.parse(status.stdout)).toMatchObject({ dataDir: tmp, defaultUser: { username: "admin", hasPassword: true } });
+
+    const empty = run("", "reset-password", "admin", "--password-stdin");
+    expect(empty.status).toBe(1);
+    expect(empty.stderr).toMatch(/at least 4/);
+  }, 60_000);
+
   it("prompts twice on a terminal and insists the two match", async () => {
     seedBob();
     const typed = ["first-pass", "other-pass"];
@@ -148,9 +177,198 @@ describe("login-mode", () => {
 
   it("rejects other modes and missing arguments", async () => {
     expect(() => setLoginMode(db, "cloudflare")).toThrow(/Unknown login mode/);
-    expect(await runCli(["login-mode", "cloudflare"], io())).toBe(1);
+    expect(await runCli(["login-mode", "cloudflare"], io())).toBe(1); // flags are required
+    expect(await runCli(["login-mode", "bogus"], io())).toBe(1);
     expect(await runCli(["login-mode"], io())).toBe(1);
     expect(readSetting(db, "loginMode")).toBeNull();
+  });
+});
+
+const TEAM = ["--team-domain", "acme.cloudflareaccess.com", "--aud", "aud-1"];
+
+function setEmailFor(username: string, email: string | null): void {
+  db.update(users).set({ email }).where(eq(users.username, username)).run();
+}
+
+function readyAdmin(email = "admin@example.com"): void {
+  resetPassword(db, "admin", "admin-pass");
+  setEmailFor("admin", email);
+}
+
+describe("login-mode cloudflare", () => {
+  it("is refused while the Default user has no password, and changes nothing", async () => {
+    setEmailFor("admin", "admin@example.com");
+    expect(await runCli(["login-mode", "cloudflare", ...TEAM], io())).toBe(1);
+    expect(err.join("\n")).toMatch(/reset-password admin/);
+    expect(err.join("\n")).toMatch(/way back in/);
+    expect(readSetting(db, "loginMode")).toBeNull();
+    expect(readAccessSettings(db)).toEqual({ teamDomain: null, audTags: [] });
+    expect(closed).toBe(1);
+  });
+
+  it("is refused while the Default user has no email", async () => {
+    resetPassword(db, "admin", "admin-pass");
+    expect(await runCli(["login-mode", "cloudflare", ...TEAM], io())).toBe(1);
+    expect(err.join("\n")).toMatch(/user email admin/);
+    expect(readLoginMode(db)).toBe("password");
+  });
+
+  it("rejects a team domain that isn't cloudflareaccess.com", async () => {
+    readyAdmin();
+    for (const domain of ["evil.example.com", "https://acme.cloudflareaccess.com.evil.com", "   "]) {
+      err.length = 0;
+      expect(await runCli(["login-mode", "cloudflare", "--team-domain", domain, "--aud", "a"], io())).toBe(1);
+      expect(err.join("\n")).toMatch(/team domain/);
+    }
+    expect(readLoginMode(db)).toBe("password");
+    expect(readAccessSettings(db).teamDomain).toBeNull();
+  });
+
+  it("needs at least one AUD tag and a team domain", async () => {
+    readyAdmin();
+    expect(await runCli(["login-mode", "cloudflare", "--team-domain", "acme"], io())).toBe(1);
+    expect(err.join("\n")).toMatch(/AUD tag/);
+    expect(await runCli(["login-mode", "cloudflare", "--aud", "a"], io())).toBe(1);
+    expect(await runCli(["login-mode", "cloudflare", "--team-domain", "acme", "--aud"], io())).toBe(1);
+    expect(await runCli(["login-mode", "cloudflare", "--team-domain", "acme", "--aud", "  "], io())).toBe(1);
+    expect(readLoginMode(db)).toBe("password");
+  });
+
+  it("stores the normalised config, switches the mode, drops every session and names the way back", async () => {
+    readyAdmin();
+    seedBob();
+    const code = await runCli(
+      ["login-mode", "cloudflare", "--team-domain", "ACME", "--aud", "aud-1", "--aud=aud-2", "--aud", "aud-1"],
+      io(),
+    );
+    expect(code).toBe(0);
+    expect(readLoginMode(db)).toBe("cloudflare");
+    expect(readAccessSettings(db)).toEqual({ teamDomain: "https://acme.cloudflareaccess.com", audTags: ["aud-1", "aud-2"] });
+    expect(db.select().from(adminSessions).all()).toEqual([]);
+    const text = out.join("\n");
+    expect(text).toContain("https://acme.cloudflareaccess.com");
+    expect(text).toContain("admin@example.com");
+    expect(text).toContain("mcp-switchboard login-mode password");
+    expect(closed).toBe(1);
+  });
+
+  it("keeps sessions when only updating the config of an instance already in Access mode", async () => {
+    readyAdmin();
+    expect(await runCli(["login-mode", "cloudflare", ...TEAM], io())).toBe(0);
+    db.insert(adminSessions).values({ id: "later", userId: defaultUserId(db), createdAt: Date.now() }).run();
+    expect(await runCli(["login-mode", "cloudflare", "--team-domain", "other", "--aud", "aud-9"], io())).toBe(0);
+    expect(db.select().from(adminSessions).all().map((s) => s.id)).toEqual(["later"]);
+    expect(readAccessSettings(db).audTags).toEqual(["aud-9"]);
+  });
+
+  it("can be undone with login-mode password", async () => {
+    readyAdmin();
+    await runCli(["login-mode", "cloudflare", ...TEAM], io());
+    expect(await runCli(["login-mode", "password"], io())).toBe(0);
+    expect(readLoginMode(db)).toBe("password");
+  });
+});
+
+describe("user email", () => {
+  it("sets, replaces and clears an email", async () => {
+    seedBob();
+    expect(await runCli(["user", "email", "bob", "  Bob@Example.com "], io())).toBe(0);
+    expect(getUserByUsername(db, "bob")!.email).toBe("Bob@Example.com");
+    expect(await runCli(["user", "email", "bob", "bob2@example.com"], io())).toBe(0);
+    expect(getUserByUsername(db, "bob")!.email).toBe("bob2@example.com");
+    expect(await runCli(["user", "email", "bob", "--clear"], io())).toBe(0);
+    expect(getUserByUsername(db, "bob")!.email).toBeNull();
+    expect(closed).toBe(3);
+  });
+
+  it("refuses an email another user has, ignoring case, but lets a user keep their own", async () => {
+    seedBob();
+    setEmailFor("admin", "shared@example.com");
+    expect(await runCli(["user", "email", "bob", "SHARED@example.com"], io())).toBe(1);
+    expect(err.join("\n")).toMatch(/already in use/);
+    expect(getUserByUsername(db, "bob")!.email).toBeNull();
+    expect(await runCli(["user", "email", "admin", "Shared@Example.com"], io())).toBe(0);
+  });
+
+  it("explains unknown users and invalid emails", async () => {
+    expect(await runCli(["user", "email", "ghost", "a@b.co"], io())).toBe(1);
+    expect(err.join("\n")).toMatch(/No user named "ghost"/);
+    err.length = 0;
+    expect(await runCli(["user", "email", "admin", "not-an-email"], io())).toBe(1);
+    expect(err.join("\n")).toMatch(/email address/);
+    expect(await runCli(["user", "email", "admin", " "], io())).toBe(1);
+    expect(getUserByUsername(db, "admin")!.email).toBeNull();
+  });
+
+  it("needs the right arguments", async () => {
+    const bad = [["user", "email"], ["user", "email", "bob"], ["user", "email", "bob", "a@b.co", "--clear"], ["user", "email", "bob", "x@y.zz", "extra"], ["user"], ["user", "frob"]];
+    for (const args of bad) {
+      err.length = 0;
+      expect(await runCli(args, io())).toBe(1);
+      expect(err[0]).toContain("Usage:");
+    }
+  });
+});
+
+describe("user list and status", () => {
+  it("lists one line per user without secrets", async () => {
+    seedBob();
+    setEmailFor("bob", "bob@example.com");
+    expect(await runCli(["user", "list"], io())).toBe(0);
+    expect(out).toHaveLength(2);
+    expect(out[0]).toMatch(/^admin\s+admin\s+-\s+password=no\s+disabled=no\s+default=yes$/);
+    expect(out[1]).toMatch(/^bob\s+user\s+bob@example.com\s+password=yes\s+disabled=no\s+default=no$/);
+    const bob = getUserByUsername(db, "bob")!;
+    for (const secret of [bob.passwordHash!, bob.setupCodeHash!]) expect(out.join("\n")).not.toContain(secret);
+  });
+
+  it("emits the documented JSON shape and flags disabled users", async () => {
+    const bob = seedBob();
+    const row = getUserByUsername(db, "bob")!;
+    db.update(users).set({ disabledAt: Date.now() }).where(eq(users.id, bob.id)).run();
+    expect(await runCli(["user", "list", "--json"], io())).toBe(0);
+    expect(JSON.parse(out.join("\n"))).toEqual([
+      { username: "admin", role: "admin", email: null, hasPassword: false, disabled: false, isDefault: true },
+      { username: "bob", role: "user", email: null, hasPassword: true, disabled: true, isDefault: false },
+    ]);
+    expect(out.join("\n")).not.toContain(row.passwordHash!);
+    expect(out.join("\n")).not.toContain(row.setupCodeHash!);
+  });
+
+  it("reports status as text and JSON", async () => {
+    readyAdmin();
+    seedBob();
+    await runCli(["login-mode", "cloudflare", ...TEAM], io());
+    out.length = 0;
+
+    expect(await runCli(["status", "--json"], io())).toBe(0);
+    expect(JSON.parse(out.join("\n"))).toEqual({
+      version: "9.9.9-test",
+      dataDir: tmp,
+      loginMode: "cloudflare",
+      access: { teamDomain: "https://acme.cloudflareaccess.com", audTags: ["aud-1"] },
+      userCount: 2,
+      defaultUser: { username: "admin", hasPassword: true, email: "admin@example.com" },
+    });
+
+    out.length = 0;
+    expect(await runCli(["status"], io())).toBe(0);
+    const text = out.join("\n");
+    for (const part of ["9.9.9-test", tmp, "cloudflare", "https://acme.cloudflareaccess.com", "aud-1", "admin@example.com"]) {
+      expect(text).toContain(part);
+    }
+    expect(text).not.toContain(getUserByUsername(db, "admin")!.passwordHash!);
+    expect(await runCli(["status", "extra"], io())).toBe(1);
+  });
+
+  it("reports an unconfigured instance", async () => {
+    expect(await runCli(["status", "--json"], io())).toBe(0);
+    expect(JSON.parse(out.join("\n"))).toMatchObject({
+      loginMode: "password",
+      access: { teamDomain: null, audTags: [] },
+      userCount: 1,
+      defaultUser: { username: "admin", hasPassword: false, email: null },
+    });
   });
 });
 
@@ -160,6 +378,12 @@ describe("dispatch", () => {
       out.length = 0;
       expect(await runCli([flag], io())).toBe(0);
       expect(out).toEqual([USAGE]);
+    }
+  });
+
+  it("documents every subcommand in --help", () => {
+    for (const part of ["status", "user list", "user email", "reset-password", "login-mode password", "login-mode cloudflare", "--team-domain", "--aud"]) {
+      expect(USAGE).toContain(part);
     }
   });
 

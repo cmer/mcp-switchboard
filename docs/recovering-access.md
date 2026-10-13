@@ -6,8 +6,12 @@ already means full access to the data, so these commands need no existing login.
 Run them with the same data directory as the server (`DATA_DIR`, see [Configuration](configuration.md#data-directory)).
 They are safe to run while the switchboard is running.
 
+Start with `status`: it shows the login mode, the Access config and whether the `admin` user has a
+password and an email, which is most of what you need to know about why sign-in is failing.
+
 | What | npx / global install | Docker |
 | --- | --- | --- |
+| Check the state | `npx @cmer/mcp-switchboard status` | `docker compose exec switchboard node dist/index.js status` |
 | Reset a password | `npx @cmer/mcp-switchboard reset-password <username>` | `docker compose exec switchboard node dist/index.js reset-password <username>` |
 | Back to password login | `npx @cmer/mcp-switchboard login-mode password` | `docker compose exec switchboard node dist/index.js login-mode password` |
 | Help | `npx @cmer/mcp-switchboard --help` | `docker compose exec switchboard node dist/index.js --help` |
@@ -56,5 +60,6 @@ npx @cmer/mcp-switchboard login-mode password
 Users sign in with a username and password again. Anyone who never chose a password needs a setup code
 from the Users page, or `reset-password` above.
 
-Only `password` is accepted. Switching *to* Cloudflare Access has to happen in Settings, because it
-needs a live Access token to prove it won't lock you out.
+In the UI, Settings only switches *to* Cloudflare Access from a request that carries a live Access token,
+to catch typos. From the host, `login-mode cloudflare` does it with the values straight from Cloudflare;
+see [Command line](configuration.md#command-line).

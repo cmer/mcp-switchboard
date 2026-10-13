@@ -64,3 +64,25 @@ of these that applies:
 
 When you upgrade from 1.x, the first start of 2.0 also writes `switchboard.db.pre-multiuser` into this
 directory. See [the changelog](../CHANGELOG.md) for what it's for.
+
+## Command line
+
+The binary also runs a few subcommands that inspect and repair an install from the host. They open the
+same data directory as the server (`DATA_DIR`), never start it, and are safe to run while it is running.
+Shell access to the machine already means full access to the data, so they need no login.
+
+Run each as `npx @cmer/mcp-switchboard <subcommand>` (a global install: `mcp-switchboard <subcommand>`), or in
+Docker as `docker compose exec switchboard node dist/index.js <subcommand>` (add `-T` when piping stdin).
+
+| Subcommand | What it does |
+| --- | --- |
+| `status [--json]` | Shows the version, data directory, login mode, Access team domain and AUD tags, user count, and whether the Default user has a password and an email. |
+| `user list [--json]` | One line per user: username, role, email, password yes/no, disabled yes/no, default yes/no. Never prints hashes or setup codes. |
+| `user email <username> <email>` | Sets a user's email, with the same checks as the Users page (valid address, unique ignoring case). |
+| `user email <username> --clear` | Removes a user's email. |
+| `reset-password <username> [--password-stdin]` | Sets a password and signs that user out. Prompts without echo, or reads stdin with `--password-stdin`. |
+| `login-mode password` | Switches back to password login. |
+| `login-mode cloudflare --team-domain <team>.cloudflareaccess.com --aud <tag> [--aud <tag> ...]` | Stores the [Cloudflare Access](cloudflare-access.md) config, switches to Access login and signs everyone out. Needs a password and an email on the Default user. |
+| `--help` | Prints the usage text. |
+
+See [Recovering access](recovering-access.md) for when to use them.
