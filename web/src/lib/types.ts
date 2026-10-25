@@ -65,8 +65,9 @@ export interface ServerRequestConfig {
   command: string | null;
   args: string[];
   url: string | null;
-  authType: string;
+  authType: "none" | "bearer" | "headers" | "oauth";
   envKeys: string[];
+  headerKeys: string[];
 }
 
 export interface ServerRequest {

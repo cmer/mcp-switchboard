@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Edit a server request before approving it.** Agents often can't send everything a server
+  needs, like a licence key they were told not to pass along, so a request used to be all or
+  nothing. Pending requests now have an **Edit** button for the name, slug, command, arguments
+  and env vars (URL, transport and auth for remote servers). Secret values the agent sent stay
+  hidden. Their keys show up as `KEY=` lines, where a blank value keeps the agent's value. The
+  *This will execute on your machine* block updates as you type, so it always shows what will
+  actually run. Edits apply only to the approval, and `request_status` still shows the agent
+  what it asked for.
+
 ## [1.5.2] — 2026-10-11
 
 ### Fixed
