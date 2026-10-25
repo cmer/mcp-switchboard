@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.0.0] — 2026-10-25
+
 This is **2.0.0**: the switchboard becomes multi-user. Nothing about an existing install has to be redone, but the upgrade is one-way, so read "Upgrading from 1.x" first.
 
 ### Upgrading from 1.x
@@ -379,7 +381,8 @@ Initial release.
 - **Built-in `switchboard__list_servers` meta-tool.**
 - Docker image and GitHub Actions CI (build + test, plus a Docker build and smoke test).
 
-[Unreleased]: https://github.com/cmer/mcp-switchboard/compare/v1.6.0...HEAD
+[Unreleased]: https://github.com/cmer/mcp-switchboard/compare/v2.0.0...HEAD
+[2.0.0]: https://github.com/cmer/mcp-switchboard/compare/v1.6.0...v2.0.0
 [1.6.0]: https://github.com/cmer/mcp-switchboard/compare/v1.5.2...v1.6.0
 [1.5.2]: https://github.com/cmer/mcp-switchboard/compare/v1.5.1...v1.5.2
 [1.5.1]: https://github.com/cmer/mcp-switchboard/compare/v1.5.0...v1.5.1
