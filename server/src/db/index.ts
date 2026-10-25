@@ -249,6 +249,19 @@ function columnNames(sq: Database.Database, table: string): string[] {
   return (sq.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[]).map((c) => c.name);
 }
 
+/**
+ * Whether `initDb` would run the one-way 1.x → 2.0 upgrade on this file. Only reads: the CLI asks
+ * this first, so it never migrates a database a 1.x server may still have open.
+ */
+export function needsMultiUserUpgrade(file: string): boolean {
+  const sq = new Database(file, { fileMustExist: true });
+  try {
+    return isPreMultiUser(sq);
+  } finally {
+    sq.close();
+  }
+}
+
 /** A 1.x database: an owned table that exists without its `user_id`. A brand-new file has neither. */
 function isPreMultiUser(sq: Database.Database): boolean {
   return (["servers", "agents"] as const).some(

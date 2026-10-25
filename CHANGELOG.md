@@ -73,7 +73,9 @@ upgrading prints a line saying so.
   Cloudflare Access from the shell, so scripts and skills can set it up with values taken straight from
   Cloudflare. It keeps the Settings guards (a password and an email on the Default user) but skips the
   live-token check, which needs a browser. See [Recovering access](docs/recovering-access.md) and
-  [Command line](docs/configuration.md#command-line) for the npx and Docker forms.
+  [Command line](docs/configuration.md#command-line) for the npx and Docker forms. Pointed at a 1.x
+  database, every subcommand refuses and says to start the 2.0 server first: `npx` fetches the latest
+  CLI, and upgrading the database under a 1.x server that is still running would break it.
 - **Per-user settings.** Auto-enable new servers, allow server requests and payload capture now belong
   to each user and apply to their own servers and agents only. They are in **Settings, Yours**;
   instance-wide settings are in **Settings, Instance** (Admin only).

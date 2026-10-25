@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { config } from "./config.js";
-import { closeDb, initDb, type Db } from "./db/index.js";
+import { closeDb, initDb, needsMultiUserUpgrade, PRE_MULTIUSER_BACKUP, type Db } from "./db/index.js";
 import { MIN_PASSWORD_LENGTH, setUserPassword } from "./core/setupCodes.js";
 import { defaultUserId, getUser, getUserByUsername, listUsers, setUserEmail } from "./core/users.js";
 import { adminSessions } from "./db/schema.js";
@@ -334,6 +334,25 @@ function readVersion(): string {
   }
 }
 
+/**
+ * Open the database for a subcommand. Unlike the server, this never creates one (that would hide a
+ * wrong DATA_DIR) and never upgrades a 1.x one: `npx` fetches the latest CLI, and migrating under a
+ * still-running 1.x server would break its next write. Upgrading is the server's job.
+ */
+export function openCliDb(dataDir: string): Db {
+  const file = path.join(dataDir, "switchboard.db");
+  if (!fs.existsSync(file)) {
+    throw new CliError(`No switchboard database in ${dataDir} (set DATA_DIR if it lives elsewhere)`);
+  }
+  if (needsMultiUserUpgrade(file)) {
+    throw new CliError(
+      `The database in ${dataDir} is from 1.x and hasn't been upgraded. Stop the 1.x server, start 2.0 once ` +
+        `(it saves a copy as ${PRE_MULTIUSER_BACKUP} before upgrading), then run this again.`,
+    );
+  }
+  return initDb(dataDir);
+}
+
 /** The real thing: the data dir comes from `config.ts`, exactly as for the server. */
 export function processCliIo(): CliIo {
   return {
@@ -348,13 +367,7 @@ export function processCliIo(): CliIo {
       for await (const chunk of process.stdin) chunks.push(Buffer.from(chunk));
       return Buffer.concat(chunks).toString("utf8");
     },
-    openDb: () => {
-      // Unlike the server, don't conjure an empty database: that would hide a wrong DATA_DIR.
-      if (!fs.existsSync(path.join(config.dataDir, "switchboard.db"))) {
-        throw new CliError(`No switchboard database in ${config.dataDir} (set DATA_DIR if it lives elsewhere)`);
-      }
-      return initDb(config.dataDir);
-    },
+    openDb: () => openCliDb(config.dataDir),
     closeDb,
   };
 }

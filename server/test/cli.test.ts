@@ -3,10 +3,11 @@ import os from "node:os";
 import path from "node:path";
 import { eq } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { closeDb, initDb, type Db } from "../src/db/index.js";
+import { closeDb, initDb, PRE_MULTIUSER_BACKUP, type Db } from "../src/db/index.js";
 import { adminSessions, users } from "../src/db/schema.js";
-import { runCli, resetPassword, setLoginMode, USAGE, type CliIo } from "../src/cli.js";
+import { openCliDb, runCli, resetPassword, setLoginMode, USAGE, type CliIo } from "../src/cli.js";
 import { spawnSync } from "node:child_process";
+import Database from "better-sqlite3";
 import { fileURLToPath } from "node:url";
 import { issueSetupCode } from "../src/core/setupCodes.js";
 import { createUser, defaultUserId, getUserByUsername } from "../src/core/users.js";
@@ -394,5 +395,39 @@ describe("dispatch", () => {
     expect(err[0]).toContain('Unknown command "frobnicate"');
     expect(err[0]).toContain("Usage:");
     expect(opened).toBe(false);
+  });
+});
+
+describe("opening the database", () => {
+  it("refuses a 1.x database instead of upgrading it under a running 1.x server", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "sb-cli-1x-"));
+    try {
+      const old = new Database(path.join(dir, "switchboard.db"));
+      old.exec("CREATE TABLE servers (id INTEGER PRIMARY KEY AUTOINCREMENT, slug TEXT NOT NULL UNIQUE)");
+      old.close();
+
+      expect(() => openCliDb(dir)).toThrow(/from 1\.x and hasn't been upgraded/);
+
+      // Untouched: no backup, no users table, no owner column.
+      expect(fs.existsSync(path.join(dir, PRE_MULTIUSER_BACKUP))).toBe(false);
+      const check = new Database(path.join(dir, "switchboard.db"), { readonly: true });
+      const tables = check.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all() as { name: string }[];
+      const cols = check.prepare("PRAGMA table_info(servers)").all() as { name: string }[];
+      check.close();
+      expect(tables.map((t) => t.name)).not.toContain("users");
+      expect(cols.map((c) => c.name)).not.toContain("user_id");
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("still refuses to conjure a database where there is none", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "sb-cli-none-"));
+    try {
+      expect(() => openCliDb(dir)).toThrow(/No switchboard database/);
+      expect(fs.existsSync(path.join(dir, "switchboard.db"))).toBe(false);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
