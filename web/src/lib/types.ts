@@ -112,8 +112,9 @@ export interface ServerRequestConfig {
   args: string[];
   cwd: string | null;
   url: string | null;
-  authType: string;
+  authType: "none" | "bearer" | "headers" | "oauth";
   envKeys: string[];
+  headerKeys: string[];
 }
 
 export interface ServerRequest {

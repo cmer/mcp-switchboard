@@ -16,7 +16,7 @@ import {
   META_TOOL_REQUEST_STATUS,
   type AgentServerDeps,
 } from "../src/core/agentServerFactory.js";
-import { encrypt, loadOrCreateKey } from "../src/lib/crypto.js";
+import { decrypt, encrypt, loadOrCreateKey } from "../src/lib/crypto.js";
 import { writeSetting } from "../src/lib/settings.js";
 import { requestRoutes } from "../src/http/routes/requests.js";
 import { userScope } from "../src/core/userScope.js";
@@ -224,6 +224,7 @@ describe(META_TOOL_REQUEST_STATUS, () => {
       url: null,
       authType: "none",
       envKeys: ["API_KEY"],
+      headerKeys: [],
     });
     expect(JSON.stringify(entry)).not.toContain(SECRET_ENV_VALUE);
   });
@@ -297,6 +298,53 @@ describe("POST /api/requests/:id/approve", () => {
     const { status, body } = await apiCall("POST", `/${res.requestIds[0]}/approve`);
     expect(status).toBe(400);
     expect(body.error).toBe("Freeform requests can't be auto-executed — deny with a note, or add the server manually");
+    expect(db.select().from(servers).all()).toHaveLength(0);
+  });
+
+  it("applies the admin's edits, keeping stored env values the admin left blank", async () => {
+    const id = await fileStdioRequest();
+    const { status, body } = await apiCall("POST", `/${id}/approve`, {
+      slug: "browser",
+      args: ["-y", "@playwright/mcp@1.2.3", "--headless"],
+      env: { API_KEY: null, EXTRA: "added-by-admin" },
+    });
+
+    expect(status).toBe(200);
+    expect(body.server).toMatchObject({
+      slug: "browser",
+      name: "playwright",
+      args: ["-y", "@playwright/mcp@1.2.3", "--headless"],
+      envKeys: ["API_KEY", "EXTRA"],
+    });
+    const row = db.select().from(servers).where(eq(servers.slug, "browser")).get()!;
+    expect(JSON.parse(decrypt(row.envJsonEnc!))).toEqual({ API_KEY: SECRET_ENV_VALUE, EXTRA: "added-by-admin" });
+    expect(matrixRow("helper", "browser")?.enabled).toBe(true);
+
+    // The agent still reads back what it asked for.
+    const [entry] = await callJson(await connect("helper"), META_TOOL_REQUEST_STATUS, { id });
+    expect(entry.server).toMatchObject({ slug: "playwright", args: ["-y", "@playwright/mcp"] });
+  });
+
+  it("drops env vars the admin removed", async () => {
+    const id = await fileStdioRequest();
+    const { status } = await apiCall("POST", `/${id}/approve`, { env: {} });
+    expect(status).toBe(200);
+    expect(db.select().from(servers).where(eq(servers.slug, "playwright")).get()?.envJsonEnc).toBeNull();
+  });
+
+  it("refuses to keep an env value the request never had", async () => {
+    const id = await fileStdioRequest();
+    const { status, body } = await apiCall("POST", `/${id}/approve`, { env: { NOPE: null } });
+    expect(status).toBe(400);
+    expect(body.error).toBe(`Env var "NOPE" has no value — the request didn't include one`);
+    expect(db.select().from(serverRequests).where(eq(serverRequests.id, id)).get()?.status).toBe("pending");
+  });
+
+  it("refuses to turn a local command into a remote server", async () => {
+    const id = await fileStdioRequest();
+    const { status, body } = await apiCall("POST", `/${id}/approve`, { type: "http", url: "https://example.com/mcp" });
+    expect(status).toBe(400);
+    expect(body.error).toMatch(/Can't switch a request/);
     expect(db.select().from(servers).all()).toHaveLength(0);
   });
 

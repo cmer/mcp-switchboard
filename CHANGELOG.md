@@ -16,7 +16,7 @@ directory) before it changes anything, then gives everything you already have to
 `admin`. Sign in as `admin` with the same password as before. Every agent URL and token keeps working,
 including OAuth connections made through Claude Desktop or claude.ai; the connection snippets now show
 the new form, `/mcp/admin/<agent>`, but `/mcp/<agent>` is still answered. To roll back, stop the
-switchboard, restore `switchboard.db.pre-multiuser` as `switchboard.db`, and reinstall 1.5.x. Anything
+switchboard, restore `switchboard.db.pre-multiuser` as `switchboard.db`, and reinstall 1.6.x. Anything
 you changed after upgrading is lost.
 
 If you had sign-in turned off, it is now always on: sign in as `admin` with your old password, or
@@ -118,6 +118,19 @@ upgrading prints a line saying so.
   gone. With several users there is no way to know who you are, and sessions already last a year, so
   sign-in is always required. An install that had it off keeps working after you sign in again (see
   "Upgrading from 1.x"); `POST /api/auth/settings` ignores an `authDisabled` key.
+
+## [1.6.0] — 2026-10-25
+
+### Added
+
+- **Edit a server request before approving it.** Agents often can't send everything a server
+  needs, like a licence key they were told not to pass along, so a request used to be all or
+  nothing. Pending requests now have an **Edit** button for the name, slug, command, arguments
+  and env vars (URL, transport and auth for remote servers). Secret values the agent sent stay
+  hidden. Their keys show up as `KEY=` lines, where a blank value keeps the agent's value. The
+  *This will execute on your machine* block updates as you type, so it always shows what will
+  actually run. Edits apply only to the approval, and `request_status` still shows the agent
+  what it asked for.
 
 ## [1.5.2] — 2026-10-11
 
@@ -364,7 +377,8 @@ Initial release.
 - **Built-in `switchboard__list_servers` meta-tool.**
 - Docker image and GitHub Actions CI (build + test, plus a Docker build and smoke test).
 
-[Unreleased]: https://github.com/cmer/mcp-switchboard/compare/v1.5.2...HEAD
+[Unreleased]: https://github.com/cmer/mcp-switchboard/compare/v1.6.0...HEAD
+[1.6.0]: https://github.com/cmer/mcp-switchboard/compare/v1.5.2...v1.6.0
 [1.5.2]: https://github.com/cmer/mcp-switchboard/compare/v1.5.1...v1.5.2
 [1.5.1]: https://github.com/cmer/mcp-switchboard/compare/v1.5.0...v1.5.1
 [1.5.0]: https://github.com/cmer/mcp-switchboard/compare/v1.4.3...v1.5.0

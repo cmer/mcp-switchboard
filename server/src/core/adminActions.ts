@@ -117,6 +117,7 @@ export async function approveServerRequest(
   deps: AdminDeps,
   requester: UserScope,
   id: number,
+  edits: RequestEdits = {},
 ): Promise<InsertServerResult> {
   const row = requester.requests.get(id);
   if (!row) return { error: "Not found", status: 404 };
@@ -127,8 +128,11 @@ export async function approveServerRequest(
       status: 400,
     };
   }
-  const payload = requestPayload(row);
-  if (!payload) return { error: "Request has no stored config", status: 400 };
+  const stored = requestPayload(row);
+  if (!stored) return { error: "Request has no stored config", status: 400 };
+  // Edits apply to this approval only; the stored request keeps what the agent sent.
+  const payload = applyRequestEdits(stored, edits);
+  if ("error" in payload) return { error: payload.error, status: 400 };
 
   // The requester, if it is still around. The slug fallback stays inside the requester's own agents.
   const agent =
@@ -161,6 +165,7 @@ export interface RequestServerSummary {
   url: string | null;
   authType: ParsedServer["authType"];
   envKeys: string[];
+  headerKeys: string[];
 }
 
 /**
@@ -180,5 +185,68 @@ export function requestServerSummary(row: ServerRequestRow): RequestServerSummar
     url: payload.url ?? null,
     authType: payload.authType,
     envKeys: payload.env ? Object.keys(payload.env) : [],
+    headerKeys: payload.headers ? Object.keys(payload.headers) : [],
+  };
+}
+
+/**
+ * The admin's changes to a request before approving it. The admin never sees the stored
+ * secret values, so they're referenced instead of echoed: a `null` env/header value keeps
+ * the value the agent sent for that key, and an absent `bearerToken` keeps the stored one.
+ * A key left out of `env`/`headers` is dropped.
+ */
+export interface RequestEdits {
+  name?: string;
+  slug?: string;
+  type?: ParsedServer["type"];
+  command?: string;
+  args?: string[];
+  env?: Record<string, string | null>;
+  url?: string;
+  authType?: ParsedServer["authType"];
+  bearerToken?: string;
+  headers?: Record<string, string | null>;
+}
+
+/** Resolve `null` values to the stored ones. Returns an error string when a key has nothing to keep. */
+function mergeSecrets(
+  label: string,
+  stored: Record<string, string> | undefined,
+  edited: Record<string, string | null> | undefined,
+): { value: Record<string, string> | undefined } | { error: string } {
+  if (!edited) return { value: stored };
+  const out: Record<string, string> = {};
+  for (const [key, value] of Object.entries(edited)) {
+    if (value !== null) out[key] = value;
+    else if (stored && key in stored) out[key] = stored[key];
+    else return { error: `${label} "${key}" has no value — the request didn't include one` };
+  }
+  return { value: out };
+}
+
+/** Apply the admin's edits to a stored request config. Pure; `insertServer` does the rest of the validation. */
+export function applyRequestEdits(payload: ParsedServer, edits: RequestEdits): ParsedServer | { error: string } {
+  const type = edits.type ?? payload.type;
+  // Approving a remote request must never turn into running a command (or vice versa) —
+  // the warning the admin saw was for the original kind.
+  if ((type === "stdio") !== (payload.type === "stdio")) {
+    return { error: "Can't switch a request between a local command and a remote URL — deny it and add the server yourself" };
+  }
+  const env = mergeSecrets("Env var", payload.env, edits.env);
+  if ("error" in env) return env;
+  const headers = mergeSecrets("Header", payload.headers, edits.headers);
+  if ("error" in headers) return headers;
+  return {
+    ...payload,
+    name: edits.name ?? payload.name,
+    slug: edits.slug ?? payload.slug,
+    type,
+    command: edits.command ?? payload.command,
+    args: edits.args ?? payload.args,
+    env: env.value,
+    url: edits.url ?? payload.url,
+    authType: edits.authType ?? payload.authType,
+    bearerToken: edits.bearerToken || payload.bearerToken,
+    headers: headers.value,
   };
 }

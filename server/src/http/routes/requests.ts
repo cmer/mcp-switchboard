@@ -11,6 +11,20 @@ const denySchema = z.object({ note: z.string().max(1000).nullish() });
 
 const WAITING_FOR_ADMIN = "Waiting for the Admin — only the Admin can approve a local command you can't run";
 
+/** Optional body of POST /:id/approve — the admin's changes to the agent's config. See `RequestEdits`. */
+const editsSchema = z.object({
+  name: z.string().min(1).max(100).optional(),
+  slug: z.string().optional(),
+  type: z.enum(["stdio", "http", "sse"]).optional(),
+  command: z.string().min(1).optional(),
+  args: z.array(z.string()).optional(),
+  env: z.record(z.string(), z.string().nullable()).optional(),
+  url: z.string().url().optional(),
+  authType: z.enum(["none", "bearer", "headers", "oauth"]).optional(),
+  bearerToken: z.string().optional(),
+  headers: z.record(z.string(), z.string().nullable()).optional(),
+});
+
 /**
  * A request as its queue shows it. `server` is the decrypted config *summary*: env keys but
  * never their values, and no bearer token — `authType` is all the approver needs to see.
@@ -87,8 +101,10 @@ export function requestRoutes(ctx: AppContext): Hono {
     if (own?.status === "pending" && requestServerSummary(own)?.type === "stdio" && !scope.canRunLocalCommands) {
       return c.json({ error: WAITING_FOR_ADMIN }, 403);
     }
+    const edits = editsSchema.safeParse(await c.req.json().catch(() => ({})));
+    if (!edits.success) return c.json({ error: edits.error.issues[0]?.message ?? "Invalid input" }, 400);
 
-    const result = await approveServerRequest(adminDeps(ctx), scope, id);
+    const result = await approveServerRequest(adminDeps(ctx), scope, id, edits.data);
     if ("error" in result) return c.json({ error: result.error }, result.status);
     // Another user's server: the Admin learns it exists, not its config.
     const server = own ? serializeServer(ctx, result.row) : { id: result.row.id, slug: result.row.slug, name: result.row.name };
