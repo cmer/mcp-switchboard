@@ -1,5 +1,5 @@
 import { cn } from "@/lib/utils";
-import type { ServerInfo } from "@/lib/types";
+import type { ReceivedShare, ServerInfo } from "@/lib/types";
 
 export function statusInfo(server: ServerInfo): { tone: "ok" | "warn" | "err" | "off"; text: string } {
   if (!server.enabled) return { tone: "off", text: "Off" };
@@ -19,6 +19,20 @@ export function statusInfo(server: ServerInfo): { tone: "ok" | "warn" | "err" | 
       return { tone: "err", text: "Unreachable" };
     default:
       return { tone: "off", text: "Stopped" };
+  }
+}
+
+/** A received share's state in the recipient's terms, never the owner's connection details. */
+export function receivedStatus(share: ReceivedShare): { tone: "ok" | "warn" | "err" | "off"; text: string; sub: string } {
+  const owner = share.ownerUsername;
+  if (!share.enabled) return { tone: "off", text: "Off", sub: "not offered to any of your agents" };
+  switch (share.status) {
+    case "connected":
+      return { tone: "ok", text: "Connected", sub: `${share.toolCount} tools` };
+    case "waiting_for_owner":
+      return { tone: "warn", text: `Waiting for ${owner}`, sub: `${owner} needs to re-authorize` };
+    default:
+      return { tone: "off", text: "Unavailable", sub: `${owner}'s connection isn't available right now` };
   }
 }
 

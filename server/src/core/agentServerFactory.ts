@@ -16,11 +16,9 @@ import {
   type ServerRequest,
   type Tool,
 } from "@modelcontextprotocol/sdk/types.js";
-import { and, desc, eq, or } from "drizzle-orm";
-import { agentServers, agents, serverRequests, servers, type AgentRow } from "../db/schema.js";
+import type { AgentRow } from "../db/schema.js";
 import { parseImport, type ParsedServer } from "../lib/importParser.js";
 import { schemaToTs } from "../lib/schemaToTs.js";
-import { readSetting } from "../lib/settings.js";
 import {
   addServers,
   fileServerRequest,
@@ -28,10 +26,11 @@ import {
   setMatrix,
   type AdminDeps,
 } from "./adminActions.js";
+import { agentReach, type AgentReach, type LiveTarget, type Reachable } from "./agentReach.js";
+import { userScope } from "./userScope.js";
 import { nsName, nsResourceUri, parseNsName, parseNsResourceUri } from "./namespace.js";
 import type { RequestLogger } from "./requestLogger.js";
 import { paginate, searchTools, suggest, type SearchableTool } from "./toolSearch.js";
-import type { UpstreamConnection } from "./upstreamConnection.js";
 
 /**
  * Extends `AdminDeps` because the management meta-tools mutate the switchboard.
@@ -57,9 +56,6 @@ export const META_TOOL_CALL_TOOL = "switchboard__call_tool";
 
 /** Every switchboard-owned tool is prefixed with the reserved slug, which no server may take. */
 export const META_TOOL_PREFIX = "switchboard__";
-
-/** Settings → General; "0" hides the request tools entirely. Unset (or anything else) = on. */
-const REQUESTS_SETTING_KEY = "allowServerRequests";
 
 /** Only manager agents see or may call these. */
 const MANAGEMENT_TOOLS: Tool[] = [
@@ -229,19 +225,32 @@ const DESCRIBE_MAX_NAMES = 8;
 const STDIO_PENDING_NOTE =
   "stdio servers require admin approval — the admin will see this request in the web UI";
 
+/** The agent's row as it is now, through its owner's scope. */
+function currentAgent(deps: AgentServerDeps, agent: AgentRow): AgentRow | undefined {
+  return userScope(deps.db, agent.userId).agents.get(agent.id);
+}
+
 /** Read from the db on every call so a role toggle in the UI applies to sessions that are already live. */
-function agentRole(deps: AgentServerDeps, agentId: number): string {
-  return deps.db.select({ role: agents.role }).from(agents).where(eq(agents.id, agentId)).get()?.role ?? "standard";
+function agentRole(deps: AgentServerDeps, agent: AgentRow): string {
+  return currentAgent(deps, agent)?.role ?? "standard";
 }
 
 /** Same freshness argument as the role: a mode toggle in the UI must apply to sessions already live. */
-function toolMode(deps: AgentServerDeps, agentId: number): "full" | "lean" {
-  return deps.db.select({ mode: agents.toolMode }).from(agents).where(eq(agents.id, agentId)).get()?.mode ?? "full";
+function toolMode(deps: AgentServerDeps, agent: AgentRow): "full" | "lean" {
+  return currentAgent(deps, agent)?.toolMode ?? "full";
 }
 
-/** Same freshness argument as the role: read per call so the Settings toggle hits live sessions. */
-function requestsEnabled(deps: AgentServerDeps): boolean {
-  return readSetting(deps.db, REQUESTS_SETTING_KEY) !== "0";
+/** This agent's reach, with live connections: the only way from a name to a server. */
+function reachOf(deps: AgentServerDeps, agent: AgentRow): AgentReach {
+  return agentReach(deps.db, agent, deps.manager);
+}
+
+/**
+ * Same freshness argument as the role: read per call so the Settings toggle hits live sessions. The
+ * owner's setting, not the instance's; off hides the request tools entirely.
+ */
+function requestsEnabled(deps: AgentServerDeps, userId: number): boolean {
+  return userScope(deps.db, userId).settings.get("allowServerRequests");
 }
 
 function jsonContent(value: unknown): { content: { type: "text"; text: string }[] } {
@@ -264,17 +273,6 @@ function requireString(args: Record<string, unknown>, key: string): string {
   return value.trim();
 }
 
-/** Servers this agent has switched on, by slug — the projection used by list_agents. */
-function enabledServerSlugs(deps: AgentServerDeps, agentId: number): string[] {
-  return deps.db
-    .select({ slug: servers.slug })
-    .from(agentServers)
-    .innerJoin(servers, eq(agentServers.serverId, servers.id))
-    .where(and(eq(agentServers.agentId, agentId), eq(agentServers.enabled, true)))
-    .all()
-    .map((r) => r.slug);
-}
-
 /** Parse errors come back to the agent as a tool error so it can fix the config and retry. */
 function parseConfigOrThrow(config: string): ParsedServer[] {
   try {
@@ -295,9 +293,11 @@ async function addServerTool(deps: AgentServerDeps, agent: AgentRow, args: Recor
   const requested = Array.isArray(args.enable_for)
     ? args.enable_for.filter((s): s is string => typeof s === "string")
     : [agent.slug];
+  // Everything the tool creates or files belongs to the agent's owner; enable_for reaches only their agents.
+  const scope = userScope(deps.db, agent.userId);
   const enableForAgentIds: number[] = [];
   for (const slug of requested) {
-    const row = deps.db.select({ id: agents.id }).from(agents).where(eq(agents.slug, slug)).get();
+    const row = scope.agents.bySlug(slug);
     if (row) enableForAgentIds.push(row.id);
     else warnings.push(`Unknown agent slug "${slug}" — not enabled for it`);
   }
@@ -305,19 +305,19 @@ async function addServerTool(deps: AgentServerDeps, agent: AgentRow, args: Recor
   // stdio = arbitrary command execution on the host: never created from a tool call,
   // whatever the caller's role. It goes to the human as a request instead.
   const remote = parsed.filter((p) => p.type !== "stdio");
-  const results = await addServers(deps, remote, { createdByAgentSlug: agent.slug, enableForAgentIds });
+  const results = await addServers(deps, scope, remote, { createdByAgentSlug: agent.slug, enableForAgentIds });
 
   let next = 0;
   const outcomes = parsed.map((p) => {
     if (p.type === "stdio") {
-      const requestId = fileServerRequest(deps, {
+      const { id: requestId, escalated } = fileServerRequest(scope, {
         agentId: agent.id,
         agentSlug: agent.slug,
         kind: "add_server",
         payload: p,
         reason: `Filed automatically from ${META_TOOL_ADD_SERVER} by "${agent.slug}"`,
       });
-      return { slug: p.slug, status: "pending_approval", requestId, note: STDIO_PENDING_NOTE };
+      return { slug: p.slug, status: "pending_approval", requestId, escalated, note: STDIO_PENDING_NOTE };
     }
     const result = results[next++];
     if ("error" in result) return { slug: p.slug, status: "error", error: result.error };
@@ -344,24 +344,24 @@ function requestServerTool(deps: AgentServerDeps, agent: AgentRow, args: Record<
   const reason = requireString(args, "reason");
   const config = typeof args.config === "string" && args.config.trim() !== "" ? args.config.trim() : null;
 
-  // One row per parsed server, so the admin approves each config on its own merits.
+  // One row per parsed server, so the admin approves each config on its own merits. They land in
+  // the owner's queue, or the Admin's for a local command the owner can't run.
+  const scope = userScope(deps.db, agent.userId);
   const ids = config
-    ? parseConfigOrThrow(config).map((payload) =>
-        fileServerRequest(deps, { agentId: agent.id, agentSlug: agent.slug, kind: "add_server", payload, reason }),
+    ? parseConfigOrThrow(config).map(
+        (payload) =>
+          fileServerRequest(scope, { agentId: agent.id, agentSlug: agent.slug, kind: "add_server", payload, reason }).id,
       )
-    : [fileServerRequest(deps, { agentId: agent.id, agentSlug: agent.slug, kind: "freeform", reason })];
+    : [fileServerRequest(scope, { agentId: agent.id, agentSlug: agent.slug, kind: "freeform", reason }).id];
 
   return jsonContent({ requestIds: ids, message: pendingMessage(ids) });
 }
 
 function requestStatusTool(deps: AgentServerDeps, agent: AgentRow, args: Record<string, unknown>) {
   // Slug fallback covers rows filed before an agent was recreated; never widens past this agent.
-  const mine = or(
-    eq(serverRequests.requestedByAgentId, agent.id),
-    eq(serverRequests.requestedByAgentSlug, agent.slug),
-  );
-  const where = typeof args.id === "number" ? and(mine, eq(serverRequests.id, args.id)) : mine;
-  const rows = deps.db.select().from(serverRequests).where(where).orderBy(desc(serverRequests.id)).all();
+  const rows = userScope(deps.db, agent.userId)
+    .requests.forAgent(agent)
+    .filter((row) => typeof args.id !== "number" || row.id === args.id);
   return jsonContent(
     rows.map((row) => ({
       id: row.id,
@@ -376,40 +376,62 @@ function requestStatusTool(deps: AgentServerDeps, agent: AgentRow, args: Record<
   );
 }
 
-function assignServerTool(deps: AgentServerDeps, args: Record<string, unknown>) {
+function assignServerTool(deps: AgentServerDeps, agent: AgentRow, args: Record<string, unknown>) {
   const serverSlug = requireString(args, "server_slug");
   const agentSlug = requireString(args, "agent_slug");
   if (typeof args.enabled !== "boolean") {
     throw new McpError(ErrorCode.InvalidParams, '"enabled" is required and must be a boolean');
   }
-  const server = deps.db.select().from(servers).where(eq(servers.slug, serverSlug)).get();
+  // The owner's own servers and accepted shares (by alias), for the owner's own agents. For a share
+  // this flips the recipient's own matrix row; the shared server itself is never touched.
+  const scope = userScope(deps.db, agent.userId);
+  const server = scope.matrix.switchable().find((s) => s.name === serverSlug);
   if (!server) {
     throw new McpError(ErrorCode.InvalidParams, `Unknown server "${serverSlug}" — call ${META_TOOL_LIST_SERVERS}`);
   }
-  const target = deps.db.select().from(agents).where(eq(agents.slug, agentSlug)).get();
+  const target = scope.agents.bySlug(agentSlug);
   if (!target) {
     throw new McpError(ErrorCode.InvalidParams, `Unknown agent "${agentSlug}" — call ${META_TOOL_LIST_AGENTS}`);
   }
-  setMatrix(deps, target.id, server.id, args.enabled);
-  return jsonContent({ serverSlug: server.slug, agentSlug: target.slug, enabled: args.enabled });
+  setMatrix(deps, scope, target.id, server.serverId, args.enabled);
+  return jsonContent({ serverSlug: server.name, agentSlug: target.slug, enabled: args.enabled });
 }
 
-function listAgentsTool(deps: AgentServerDeps) {
-  // Deliberately its own projection: the REST serializer returns decrypted tokens.
-  const rows = deps.db
-    .select({ id: agents.id, slug: agents.slug, name: agents.name, role: agents.role })
-    .from(agents)
-    .all();
+function listAgentsTool(deps: AgentServerDeps, agent: AgentRow) {
+  // Deliberately its own projection: the REST serializer returns decrypted tokens. Owner's agents only.
+  const rows = userScope(deps.db, agent.userId).agents.list();
   return jsonContent(
-    rows.map((a) => ({ slug: a.slug, name: a.name, role: a.role, servers: enabledServerSlugs(deps, a.id) })),
+    rows.map((a) => ({
+      slug: a.slug,
+      name: a.name,
+      role: a.role,
+      servers: agentReach(deps.db, a)
+        .list()
+        .map((s) => s.name),
+    })),
   );
 }
 
-function serverStatusTool(deps: AgentServerDeps, args: Record<string, unknown>) {
+function serverStatusTool(deps: AgentServerDeps, agent: AgentRow, args: Record<string, unknown>) {
   const slug = requireString(args, "server_slug");
-  const row = deps.db.select().from(servers).where(eq(servers.slug, slug)).get();
-  if (!row) throw new McpError(ErrorCode.InvalidParams, `Unknown server "${slug}" — call ${META_TOOL_LIST_SERVERS}`);
-  const conn = deps.manager.get(row.id);
+  const scope = userScope(deps.db, agent.userId);
+  const named = scope.matrix.switchable().find((s) => s.name === slug);
+  if (!named) throw new McpError(ErrorCode.InvalidParams, `Unknown server "${slug}" — call ${META_TOOL_LIST_SERVERS}`);
+  const conn = deps.manager.get(named.serverId);
+  if (named.sharedBy !== undefined) {
+    // Someone else's server: status and counts only. Its errors and stderr can carry the owner's
+    // URLs, paths and tokens, so they never cross over.
+    return jsonContent({
+      slug: named.name,
+      name: named.serverName,
+      sharedBy: named.sharedBy,
+      state: named.available ? (conn?.state ?? "connecting") : "unavailable",
+      toolCount: conn?.toolsCache.length ?? 0,
+      promptCount: conn?.promptsCache.length ?? 0,
+      resourceCount: conn?.resourcesCache.length ?? 0,
+    });
+  }
+  const row = scope.servers.get(named.serverId)!;
   return jsonContent({
     slug: row.slug,
     name: row.name,
@@ -437,35 +459,21 @@ export function annotateDescription(
   return `(via ${slug}: ${serverDescription}) ${description ?? ""}`.trimEnd();
 }
 
-/** All servers this agent has enabled in the matrix (connected or not), for the roster. */
-function matrixServers(deps: AgentServerDeps, agentId: number) {
-  return deps.db
-    .select({
-      id: servers.id,
-      slug: servers.slug,
-      name: servers.name,
-      description: servers.description,
-      type: servers.type,
-      enabled: servers.enabled,
-    })
-    .from(agentServers)
-    .innerJoin(servers, eq(agentServers.serverId, servers.id))
-    .where(and(eq(agentServers.agentId, agentId), eq(agentServers.enabled, true)))
-    .all();
+/** A received share says whose it is, so the model can tell the owner's account from the user's own. */
+function rosterLine(s: Reachable): string {
+  const from = s.sharedBy !== undefined ? ` (shared by ${s.sharedBy})` : "";
+  return `- ${s.name}__* — ${s.serverName}${from}${s.description ? `: ${s.description}` : ""}`;
 }
 
-function buildInstructions(deps: AgentServerDeps, agentId: number): string {
-  const rows = matrixServers(deps, agentId).filter((r) => r.enabled);
-  const roster =
-    rows.length === 0
-      ? "No servers are currently enabled for this agent."
-      : rows
-          .map((r) => `- ${r.slug}__* — ${r.name}${r.description ? `: ${r.description}` : ""}`)
-          .join("\n");
+function buildInstructions(deps: AgentServerDeps, agent: AgentRow): string {
+  const rows = reachOf(deps, agent)
+    .list()
+    .filter((s) => s.enabled);
+  const roster = rows.length === 0 ? "No servers are currently enabled for this agent." : rows.map(rosterLine).join("\n");
   // Lean mode's instructions carry the search→describe→call loop, because the tool list no
   // longer shows the model what is available.
   const lines =
-    toolMode(deps, agentId) === "lean"
+    toolMode(deps, agent) === "lean"
       ? [
           "MCP Switchboard (lean mode): tools from multiple MCP servers are available by search, not listed upfront. Tool names are <server-slug>__<tool>.",
           "Workflow:",
@@ -479,12 +487,12 @@ function buildInstructions(deps: AgentServerDeps, agentId: number): string {
           "When several servers expose similar tools (e.g. multiple accounts of the same service), pick by prefix using the roster below.",
           `Call ${META_TOOL_LIST_SERVERS} for live status and details.`,
         ];
-  if (requestsEnabled(deps)) {
+  if (requestsEnabled(deps, agent.userId)) {
     lines.push(
       `Need a server that isn't listed? ${META_TOOL_REQUEST_SERVER} files it for the admin to approve (paste the config if you have one); ${META_TOOL_REQUEST_STATUS} reads the verdict back.`,
     );
   }
-  if (agentRole(deps, agentId) === "manager") {
+  if (agentRole(deps, agent) === "manager") {
     lines.push(
       "",
       `Management: this agent may reconfigure the switchboard. ${META_TOOL_ADD_SERVER} registers a remote MCP server from a pasted config, ${META_TOOL_ASSIGN_SERVER} grants or revokes a server for an agent, ${META_TOOL_LIST_AGENTS} shows the agent roster, and ${META_TOOL_SERVER_STATUS} diagnoses a server.`,
@@ -494,45 +502,18 @@ function buildInstructions(deps: AgentServerDeps, agentId: number): string {
   return lines.join("\n");
 }
 
-/** Connected upstream connections enabled for this agent, with their slugs. (Exported for tests.) */
-export function enabledConnections(deps: AgentServerDeps, agentId: number): UpstreamConnection[] {
-  const rows = deps.db
-    .select({ serverId: agentServers.serverId })
-    .from(agentServers)
-    .innerJoin(servers, eq(agentServers.serverId, servers.id))
-    .where(and(eq(agentServers.agentId, agentId), eq(agentServers.enabled, true), eq(servers.enabled, true)))
-    .all();
-  const out: UpstreamConnection[] = [];
-  for (const { serverId } of rows) {
-    const conn = deps.manager.get(serverId);
-    if (conn && conn.state === "connected") out.push(conn);
-  }
-  return out;
-}
-
-/** Resolve a namespaced name to its (connection, bare name), enforcing the agent matrix. (Exported for tests.) */
-export function resolveTarget(
-  deps: AgentServerDeps,
-  agentId: number,
-  namespaced: string,
-): { conn: UpstreamConnection; name: string } {
+/**
+ * A namespaced name → (target, bare name), through the agent's reach. A server the agent can't reach
+ * gets the same error as one that doesn't exist, so an agent can't probe for other servers.
+ */
+function resolveOrThrow(reach: AgentReach, namespaced: string): { target: LiveTarget; name: string } {
   const parsed = parseNsName(namespaced);
   if (!parsed) {
     throw new McpError(ErrorCode.InvalidParams, `Unknown name "${namespaced}" (expected <server>__<name>)`);
   }
-  const conn = deps.manager.getBySlug(parsed.slug);
-  if (!conn) throw new McpError(ErrorCode.InvalidParams, `Unknown server "${parsed.slug}"`);
-  const matrix = deps.db
-    .select()
-    .from(agentServers)
-    .where(and(eq(agentServers.agentId, agentId), eq(agentServers.serverId, conn.serverId)))
-    .get();
-  if (!matrix?.enabled) {
-    // Deliberately identical to the unknown-server error so an agent cannot probe which slugs
-    // exist globally by comparing the two failures.
-    throw new McpError(ErrorCode.InvalidParams, `Unknown server "${parsed.slug}"`);
-  }
-  return { conn, name: parsed.name };
+  const target = reach.resolve(parsed.slug);
+  if (!target) throw new McpError(ErrorCode.InvalidParams, `Unknown server "${parsed.slug}"`);
+  return { target, name: parsed.name };
 }
 
 /**
@@ -540,14 +521,14 @@ export function resolveTarget(
  * the matrix changes) and a stale search space would offer tools that can no longer be called.
  * Same projection as the full-mode tool list, minus the schemas.
  */
-function searchSpace(deps: AgentServerDeps, agentId: number): SearchableTool[] {
+function searchSpace(reach: AgentReach): SearchableTool[] {
   const space: SearchableTool[] = [];
-  for (const conn of enabledConnections(deps, agentId)) {
+  for (const { server, conn } of reach.connected()) {
     for (const tool of conn.toolsCache) {
       space.push({
-        name: nsName(conn.row.slug, tool.name),
-        server: conn.row.slug,
-        description: annotateDescription(conn.row.slug, conn.row.description, tool.description),
+        name: nsName(server.name, tool.name),
+        server: server.name,
+        description: annotateDescription(server.name, server.description, tool.description),
       });
     }
   }
@@ -565,8 +546,8 @@ function truncate(text: string | undefined, max: number): string | undefined {
   return text.length > max ? `${text.slice(0, max)}…` : text;
 }
 
-function searchToolsTool(deps: AgentServerDeps, agentId: number, args: Record<string, unknown>) {
-  const space = searchSpace(deps, agentId);
+function searchToolsTool(reach: AgentReach, args: Record<string, unknown>) {
+  const space = searchSpace(reach);
   const query = typeof args.query === "string" ? args.query.trim() : "";
   const server = typeof args.server === "string" && args.server.trim() !== "" ? args.server.trim() : undefined;
   const limit = clampNumber(args.limit, SEARCH_LIMIT_DEFAULT, 1, SEARCH_LIMIT_MAX);
@@ -580,9 +561,10 @@ function searchToolsTool(deps: AgentServerDeps, agentId: number, args: Record<st
 
   if (server !== undefined) {
     // Valid slugs come from this agent's own roster: an unknown slug never reveals another agent's servers.
-    const valid = matrixServers(deps, agentId)
-      .filter((r) => r.enabled)
-      .map((r) => r.slug);
+    const valid = reach
+      .list()
+      .filter((s) => s.enabled)
+      .map((s) => s.name);
     if (!valid.includes(server)) {
       return errorContent(
         valid.length === 0
@@ -620,27 +602,23 @@ function searchToolsTool(deps: AgentServerDeps, agentId: number, args: Record<st
  * One entry of a describe batch. A name the agent may not use is reported exactly like a name
  * that does not exist — otherwise the error itself would disclose servers this agent lacks.
  */
-function describeOne(
-  deps: AgentServerDeps,
-  agentId: number,
-  space: SearchableTool[],
-  name: string,
-): Record<string, unknown> {
+function describeOne(reach: AgentReach, space: SearchableTool[], name: string): Record<string, unknown> {
   const notFound = () => ({ name, error: "tool_not_found", suggestions: suggest(space, name, 3) });
 
-  let resolved: { conn: UpstreamConnection; name: string };
+  let resolved: { target: LiveTarget; name: string };
   try {
-    resolved = resolveTarget(deps, agentId, name);
+    resolved = resolveOrThrow(reach, name);
   } catch {
     return notFound();
   }
-  const tool = resolved.conn.toolsCache.find((t) => t.name === resolved.name);
+  const { server, conn } = resolved.target;
+  const tool = conn.toolsCache.find((t) => t.name === resolved.name);
   if (!tool) return notFound();
 
   const entry: Record<string, unknown> = {
     name,
-    server: resolved.conn.row.slug,
-    description: annotateDescription(resolved.conn.row.slug, resolved.conn.row.description, tool.description),
+    server: server.name,
+    description: annotateDescription(server.name, server.description, tool.description),
   };
   // Null-prototype so a def named `__proto__` or `constructor` is stored as an ordinary key.
   const definitions: Record<string, string> = Object.create(null);
@@ -683,7 +661,7 @@ function renderSchema(schema: unknown): { type: string; definitions: Record<stri
   }
 }
 
-function describeToolsTool(deps: AgentServerDeps, agentId: number, args: Record<string, unknown>) {
+function describeToolsTool(reach: AgentReach, args: Record<string, unknown>) {
   const names = args.names;
   if (!Array.isArray(names) || names.some((n) => typeof n !== "string")) {
     throw new McpError(ErrorCode.InvalidParams, '"names" is required and must be an array of namespaced tool names');
@@ -691,8 +669,8 @@ function describeToolsTool(deps: AgentServerDeps, agentId: number, args: Record<
   if (names.length > DESCRIBE_MAX_NAMES) {
     return errorContent(`Too many names — call with at most ${DESCRIBE_MAX_NAMES} per call.`);
   }
-  const space = searchSpace(deps, agentId);
-  return jsonContent({ tools: (names as string[]).map((name) => describeOne(deps, agentId, space, name)) });
+  const space = searchSpace(reach);
+  return jsonContent({ tools: (names as string[]).map((name) => describeOne(reach, space, name)) });
 }
 
 /**
@@ -717,8 +695,7 @@ function upstreamCallOpts(
 }
 
 async function callToolTool(
-  deps: AgentServerDeps,
-  agentId: number,
+  reach: AgentReach,
   args: Record<string, unknown>,
   progressToken: string | number | undefined,
   extra: RequestHandlerExtra<ServerRequest, ServerNotification>,
@@ -728,9 +705,10 @@ async function callToolTool(
   if (name.startsWith(META_TOOL_PREFIX)) {
     return errorContent(`Meta-tools are called directly, not through ${META_TOOL_CALL_TOOL}.`);
   }
-  const { conn, name: bare } = resolveTarget(deps, agentId, name);
+  const { target, name: bare } = resolveOrThrow(reach, name);
+  reach.recordUse(target.server);
   const toolArgs = args.arguments as Record<string, unknown> | undefined;
-  return conn.callTool(bare, toolArgs, upstreamCallOpts(progressToken, extra));
+  return target.conn.callTool(bare, toolArgs, upstreamCallOpts(progressToken, extra));
 }
 
 /** Build the agent-facing MCP server: aggregates enabled upstreams with namespaced names. */
@@ -748,49 +726,50 @@ export function buildAgentServer(agent: AgentRow, deps: AgentServerDeps): Server
       // Flipping the mode mid-session updates tools/list and tools/call behaviour immediately,
       // but this session's instructions stay stale until the client re-initializes — a known
       // protocol limitation, not something the switchboard can push.
-      instructions: buildInstructions(deps, agent.id),
+      instructions: buildInstructions(deps, agent),
     },
   );
 
   server.setRequestHandler(ListToolsRequestSchema, async () => {
     const tools: Tool[] = [];
     // Lean mode's list is constant-size: upstream tools are reachable through search, not listed.
-    if (toolMode(deps, agent.id) === "lean") {
+    if (toolMode(deps, agent) === "lean") {
       tools.push(...LEAN_TOOLS);
     } else {
-      for (const conn of enabledConnections(deps, agent.id)) {
+      for (const { server, conn } of reachOf(deps, agent).connected()) {
         for (const tool of conn.toolsCache) {
           tools.push({
             ...tool,
-            name: nsName(conn.row.slug, tool.name),
-            description: annotateDescription(conn.row.slug, conn.row.description, tool.description),
+            name: nsName(server.name, tool.name),
+            description: annotateDescription(server.name, server.description, tool.description),
           });
         }
       }
     }
     tools.push(LIST_SERVERS_TOOL);
-    if (requestsEnabled(deps)) tools.push(...REQUEST_TOOLS);
-    if (agentRole(deps, agent.id) === "manager") tools.push(...MANAGEMENT_TOOLS);
+    if (requestsEnabled(deps, agent.userId)) tools.push(...REQUEST_TOOLS);
+    if (agentRole(deps, agent) === "manager") tools.push(...MANAGEMENT_TOOLS);
     return { tools };
   });
 
   server.setRequestHandler(CallToolRequestSchema, async (req, extra) => {
     if (LEAN_TOOL_NAMES.has(req.params.name)) {
-      if (toolMode(deps, agent.id) !== "lean") {
+      if (toolMode(deps, agent) !== "lean") {
         throw new McpError(ErrorCode.InvalidParams, "This agent uses full tool exposure; call tools directly by name.");
       }
       const args = (req.params.arguments ?? {}) as Record<string, unknown>;
+      const reach = reachOf(deps, agent);
       switch (req.params.name) {
         case META_TOOL_SEARCH_TOOLS:
-          return searchToolsTool(deps, agent.id, args);
+          return searchToolsTool(reach, args);
         case META_TOOL_DESCRIBE_TOOLS:
-          return describeToolsTool(deps, agent.id, args);
+          return describeToolsTool(reach, args);
         default:
-          return callToolTool(deps, agent.id, args, req.params._meta?.progressToken, extra);
+          return callToolTool(reach, args, req.params._meta?.progressToken, extra);
       }
     }
     if (REQUEST_TOOL_NAMES.has(req.params.name)) {
-      if (!requestsEnabled(deps)) {
+      if (!requestsEnabled(deps, agent.userId)) {
         throw new McpError(
           ErrorCode.InvalidParams,
           `"${req.params.name}" is disabled on this switchboard — ask the admin to add the server for you.`,
@@ -802,7 +781,7 @@ export function buildAgentServer(agent: AgentRow, deps: AgentServerDeps): Server
         : requestStatusTool(deps, agent, args);
     }
     if (MANAGEMENT_TOOL_NAMES.has(req.params.name)) {
-      if (agentRole(deps, agent.id) !== "manager") {
+      if (agentRole(deps, agent) !== "manager") {
         throw new McpError(
           ErrorCode.InvalidParams,
           `"${req.params.name}" requires the manager role — ask the switchboard admin to grant it to "${agent.slug}".`,
@@ -813,42 +792,47 @@ export function buildAgentServer(agent: AgentRow, deps: AgentServerDeps): Server
         case META_TOOL_ADD_SERVER:
           return addServerTool(deps, agent, args);
         case META_TOOL_ASSIGN_SERVER:
-          return assignServerTool(deps, args);
+          return assignServerTool(deps, agent, args);
         case META_TOOL_LIST_AGENTS:
-          return listAgentsTool(deps);
+          return listAgentsTool(deps, agent);
         default:
-          return serverStatusTool(deps, args);
+          return serverStatusTool(deps, agent, args);
       }
     }
     if (req.params.name === META_TOOL_LIST_SERVERS) {
-      const catalog = matrixServers(deps, agent.id).map((r) => {
-        const conn = deps.manager.get(r.id);
-        return {
-          slug: r.slug,
-          toolPrefix: `${r.slug}__`,
-          name: r.name,
-          description: r.description ?? null,
-          type: r.type,
-          status: !r.enabled ? "disabled" : (conn?.state ?? "disabled"),
-          toolCount: conn?.toolsCache.length ?? 0,
-        };
-      });
+      const catalog = reachOf(deps, agent)
+        .list()
+        .map((s) => {
+          const conn = deps.manager.get(s.serverId);
+          return {
+            slug: s.name,
+            toolPrefix: `${s.name}__`,
+            name: s.serverName,
+            description: s.description ?? null,
+            // A share names its owner, and keeps how the owner reaches it (its type) to itself.
+            ...(s.sharedBy !== undefined ? { sharedBy: s.sharedBy } : { type: s.type }),
+            status: !s.enabled ? "disabled" : (conn?.state ?? "disabled"),
+            toolCount: conn?.toolsCache.length ?? 0,
+          };
+        });
       return { content: [{ type: "text", text: JSON.stringify(catalog, null, 2) }] };
     }
     // Lean mode hides upstream tools from the list but does not block them: an agent that already
     // knows a namespaced name may still call it directly, with the same matrix enforcement.
-    const { conn, name } = resolveTarget(deps, agent.id, req.params.name);
-    return conn.callTool(name, req.params.arguments, upstreamCallOpts(req.params._meta?.progressToken, extra));
+    const reach = reachOf(deps, agent);
+    const { target, name } = resolveOrThrow(reach, req.params.name);
+    reach.recordUse(target.server);
+    return target.conn.callTool(name, req.params.arguments, upstreamCallOpts(req.params._meta?.progressToken, extra));
   });
 
   server.setRequestHandler(ListPromptsRequestSchema, async () => {
     const prompts: Prompt[] = [];
-    for (const conn of enabledConnections(deps, agent.id)) {
+    for (const { server, conn } of reachOf(deps, agent).connected()) {
       for (const prompt of conn.promptsCache) {
         prompts.push({
           ...prompt,
-          name: nsName(conn.row.slug, prompt.name),
-          description: annotateDescription(conn.row.slug, conn.row.description, prompt.description),
+          name: nsName(server.name, prompt.name),
+          description: annotateDescription(server.name, server.description, prompt.description),
         });
       }
     }
@@ -856,15 +840,17 @@ export function buildAgentServer(agent: AgentRow, deps: AgentServerDeps): Server
   });
 
   server.setRequestHandler(GetPromptRequestSchema, async (req, extra) => {
-    const { conn, name } = resolveTarget(deps, agent.id, req.params.name);
-    return conn.getPrompt(name, req.params.arguments, { signal: extra.signal });
+    const reach = reachOf(deps, agent);
+    const { target, name } = resolveOrThrow(reach, req.params.name);
+    reach.recordUse(target.server);
+    return target.conn.getPrompt(name, req.params.arguments, { signal: extra.signal });
   });
 
   server.setRequestHandler(ListResourcesRequestSchema, async () => {
     const resources: Resource[] = [];
-    for (const conn of enabledConnections(deps, agent.id)) {
+    for (const { server, conn } of reachOf(deps, agent).connected()) {
       for (const resource of conn.resourcesCache) {
-        resources.push({ ...resource, uri: nsResourceUri(conn.row.slug, resource.uri) });
+        resources.push({ ...resource, uri: nsResourceUri(server.name, resource.uri) });
       }
     }
     return { resources };
@@ -878,19 +864,12 @@ export function buildAgentServer(agent: AgentRow, deps: AgentServerDeps): Server
     if (!parsed) {
       throw new McpError(ErrorCode.InvalidParams, `Unknown resource URI "${req.params.uri}" (expected sb://<server>/…)`);
     }
-    const conn = deps.manager.getBySlug(parsed.slug);
-    if (!conn) throw new McpError(ErrorCode.InvalidParams, `Unknown server "${parsed.slug}"`);
-    const matrix = deps.db
-      .select()
-      .from(agentServers)
-      .where(and(eq(agentServers.agentId, agent.id), eq(agentServers.serverId, conn.serverId)))
-      .get();
-    if (!matrix?.enabled) {
-      // Same error as an unknown server, for the same reason as in resolveTarget: a server this
-      // agent lacks must be indistinguishable from one that does not exist.
-      throw new McpError(ErrorCode.InvalidParams, `Unknown server "${parsed.slug}"`);
-    }
-    const result = await conn.readResource(parsed.uri, { signal: extra.signal });
+    const reach = reachOf(deps, agent);
+    // Same error for a server this agent can't reach as for one that doesn't exist (see resolveOrThrow).
+    const target = reach.resolve(parsed.slug);
+    if (!target) throw new McpError(ErrorCode.InvalidParams, `Unknown server "${parsed.slug}"`);
+    reach.recordUse(target.server);
+    const result = await target.conn.readResource(parsed.uri, { signal: extra.signal });
     // Re-namespace URIs in the response so follow-up reads route correctly.
     return {
       ...result,

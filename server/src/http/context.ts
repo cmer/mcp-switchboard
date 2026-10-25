@@ -6,6 +6,7 @@ import type { TokenRefresher } from "../core/tokenRefresher.js";
 import type { UpstreamManager } from "../core/upstreamManager.js";
 import type { AgentOAuthStore } from "../oauth/agentOAuth.js";
 import type { DbOAuthProvider } from "../oauth/dbOAuthProvider.js";
+import type { AccessVerifier } from "../lib/cloudflareAccess.js";
 import type { AdminSessionStore } from "./adminAuth.js";
 
 export interface AppContext {
@@ -15,6 +16,8 @@ export interface AppContext {
   logger: RequestLogger;
   refresher: TokenRefresher;
   adminSessions: AdminSessionStore;
+  /** Cloudflare Access JWT verifier; omitted = the shared one that fetches Cloudflare's keys. */
+  access?: AccessVerifier;
   /** Tokens for clients that reach /mcp/<slug> over OAuth instead of a static bearer token. */
   agentOAuth: AgentOAuthStore;
   makeOAuthProvider: (serverId: number) => DbOAuthProvider;

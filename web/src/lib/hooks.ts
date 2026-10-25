@@ -5,6 +5,7 @@ import { api } from "./api";
 import type {
   AgentInfo,
   AuthMe,
+  DirectoryUser,
   LogConfig,
   LogDetail,
   LogEvent,
@@ -14,6 +15,8 @@ import type {
   ServerInfo,
   ServerRequest,
   ServerToolsInfo,
+  SharesResponse,
+  UserInfo,
 } from "./types";
 
 const POLL_MS = 4000;
@@ -53,6 +56,48 @@ export function useServerRequests(enabled = true) {
     refetchInterval: REQUESTS_POLL_MS,
     enabled,
   });
+}
+
+/** Shares offered to me, and the ones I accepted. */
+export function useShares() {
+  return useQuery({
+    queryKey: ["shares"],
+    queryFn: () => api<SharesResponse>("/api/shares"),
+    refetchInterval: POLL_MS,
+  });
+}
+
+/** Other users' names, for the Share dialog. */
+export function useDirectory(enabled = true) {
+  return useQuery({
+    queryKey: ["directory"],
+    queryFn: () => api<DirectoryUser[]>("/api/directory/users"),
+    enabled,
+  });
+}
+
+/** Admin only. */
+export function useUsers(enabled = true) {
+  return useQuery({
+    queryKey: ["users"],
+    queryFn: () => api<UserInfo[]>("/api/users"),
+    enabled,
+  });
+}
+
+/** Signs out; in Cloudflare Access mode the server names the Access logout page to go on to. */
+export function useLogout() {
+  const qc = useQueryClient();
+  return async () => {
+    const res = await api<{ ok: boolean; redirect?: string | null }>("/api/auth/logout", { method: "POST" });
+    if (res.redirect) {
+      window.location.href = res.redirect;
+      return;
+    }
+    // Drop the previous user's cached data so the next sign-in never flashes it.
+    qc.removeQueries({ predicate: (q) => q.queryKey[0] !== "auth" });
+    await qc.invalidateQueries({ queryKey: ["auth"] });
+  };
 }
 
 export function useServerTools(serverId: number | null) {

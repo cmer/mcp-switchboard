@@ -5,9 +5,11 @@ import Database from "better-sqlite3";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Hono } from "hono";
 import { closeDb, initDb, type Db } from "../src/db/index.js";
+import { defaultUserId } from "../src/core/users.js";
 import { agents } from "../src/db/schema.js";
 import { encrypt, loadOrCreateKey } from "../src/lib/crypto.js";
 import { agentRoutes } from "../src/http/routes/agents.js";
+import { mountAs } from "./helpers/mountAs.js";
 import type { AppContext } from "../src/http/context.js";
 
 let db: Db;
@@ -32,11 +34,11 @@ beforeEach(() => {
   tmp = fs.mkdtempSync(path.join(os.tmpdir(), "sb-toolmode-"));
   loadOrCreateKey(tmp);
   db = initDb(tmp);
-  db.insert(agents).values({ slug: "claude", name: "Claude", tokenEnc: encrypt("t"), createdAt: Date.now() }).run();
+  db.insert(agents).values({ userId: defaultUserId(db), slug: "claude", name: "Claude", tokenEnc: encrypt("t"), createdAt: Date.now() }).run();
 
   notifyAgent = vi.fn();
   const hub = { notifyAgent, sessionCount: () => 0, dropAgentSessions: async () => {} };
-  api = agentRoutes({ db, hub } as unknown as AppContext);
+  api = mountAs(db, agentRoutes({ db, hub } as unknown as AppContext));
 });
 
 afterEach(() => {

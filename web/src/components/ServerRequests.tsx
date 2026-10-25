@@ -7,6 +7,35 @@ import type { ServerRequest, ServerRequestConfig } from "@/lib/types";
 import { cn, timeAgo } from "@/lib/utils";
 import { Badge, Button, Field, Input, Select, Textarea } from "@/components/ui";
 
+/** My own local-command request, filed for the Admin because I may not run local commands myself. */
+export function isWaitingForAdmin(req: ServerRequest): boolean {
+  return req.status === "pending" && req.escalated && req.requestedByUsername === null;
+}
+
+/** Pending, and mine (or the Admin's, for someone else's) to approve or deny. */
+export function needsMyAction(req: ServerRequest): boolean {
+  return req.status === "pending" && !isWaitingForAdmin(req);
+}
+
+/** Who asked: an agent, a person in the web UI, and (in the Admin's queue) which user. */
+function Requester({ req }: { req: ServerRequest }) {
+  return (
+    <>
+      {req.requestedByUsername && (
+        <Badge className="border-primary/40 text-primary" title="This request was escalated to you by another user">
+          from {req.requestedByUsername}
+        </Badge>
+      )}
+      {req.requestedByAgentSlug ? (
+        <code className="font-mono text-[13px] font-semibold">{req.requestedByAgentSlug}</code>
+      ) : (
+        // Filed from the web UI: the "from <user>" badge already says who.
+        !req.requestedByUsername && <span className="text-[13px] font-semibold">You</span>
+      )}
+    </>
+  );
+}
+
 /** One-line description of what the request would create. */
 function configSummary(req: ServerRequest): string {
   const s = req.server;
@@ -19,7 +48,19 @@ function configSummary(req: ServerRequest): string {
  * Approving an stdio request authorizes command execution on the host, so the exact
  * command line and env keys get the loudest block in the app — never a summary.
  */
-function StdioWarning({ command, args, envKeys }: { command: string; args: string[]; envKeys: string[] }) {
+function StdioWarning({
+  req,
+  command,
+  args,
+  envKeys,
+}: {
+  req: ServerRequest;
+  command: string;
+  args: string[];
+  envKeys: string[];
+}) {
+  const cwd = req.server?.cwd;
+  const asked = req.requestedByUsername ? `${req.requestedByUsername} asked for` : "This asks for";
   return (
     <div className="mt-3 rounded-[10px] border border-err/40 bg-err-bg px-3 py-2.5">
       <div className="flex items-center gap-1.5 text-[12.5px] font-semibold text-err">
@@ -29,6 +70,7 @@ function StdioWarning({ command, args, envKeys }: { command: string; args: strin
       <pre className="mt-2 overflow-x-auto rounded-lg border border-border-soft bg-code-bg px-3 py-2 font-mono text-[11.5px] leading-relaxed">
         {[command, ...args].join(" ")}
       </pre>
+      {cwd && <p className="mt-2 font-mono text-[11px] text-muted-fg">cwd: {cwd}</p>}
       {envKeys.length > 0 && (
         <p className="mt-2 font-mono text-[11px] text-muted-fg">
           env: {envKeys.join(", ")}
@@ -36,8 +78,9 @@ function StdioWarning({ command, args, envKeys }: { command: string; args: strin
         </p>
       )}
       <p className="mt-2 text-[11.5px] leading-relaxed text-muted-fg">
-        The switchboard spawns this process with your user account. Approve only if you recognise the package and
-        trust where the agent found it.
+        {req.requestedByUsername
+          ? `${asked} a command that runs on this machine under the switchboard's account, with no sandbox. If you approve it, it becomes ${req.requestedByUsername}'s server. Approve only if you recognise the package and trust ${req.requestedByUsername}.`
+          : "The switchboard spawns this process with your user account. Approve only if you recognise the package and trust where the agent found it."}
       </p>
     </div>
   );
@@ -221,7 +264,9 @@ function PendingCard({ req }: { req: ServerRequest }) {
     ["requests", "servers", "agents"],
     () =>
       toast.success(
-        `Approved — ${draft?.slug.trim() || req.server?.slug || "the server"} is live for the requesting agent`,
+        req.requestedByUsername
+          ? `Approved — ${draft?.slug.trim() || req.server?.slug || "the server"} now belongs to ${req.requestedByUsername}`
+          : `Approved — ${draft?.slug.trim() || req.server?.slug || "the server"} is live for the requesting agent`,
       ),
   );
   const deny = useApiMutation(
@@ -230,7 +275,7 @@ function PendingCard({ req }: { req: ServerRequest }) {
     () => {
       setDenying(false);
       setNote("");
-      toast.success("Request denied — the agent can read your note");
+      toast.success(req.requestedByUsername ? "Request denied — they can read your note" : "Request denied — the agent can read your note");
     },
   );
 
@@ -243,7 +288,7 @@ function PendingCard({ req }: { req: ServerRequest }) {
   return (
     <div className="border-b border-border-soft px-4 py-3.5 last:border-0">
       <div className="flex flex-wrap items-center gap-2">
-        <code className="font-mono text-[13px] font-semibold">{req.requestedByAgentSlug}</code>
+        <Requester req={req} />
         <span className="text-xs text-faint">
           {req.kind === "add_server" ? "wants to add a server" : "is asking for a server"}
         </span>
@@ -272,12 +317,13 @@ function PendingCard({ req }: { req: ServerRequest }) {
       {s?.type === "stdio" &&
         (draft ? (
           <StdioWarning
+            req={req}
             command={draft.command.trim()}
             args={draftArgs(draft)}
             envKeys={Object.keys(parseSecretLines(draft.env, s.envKeys))}
           />
         ) : (
-          <StdioWarning command={s.command ?? ""} args={s.args} envKeys={s.envKeys} />
+          <StdioWarning req={req} command={s.command ?? ""} args={s.args} envKeys={s.envKeys} />
         ))}
 
       {!s && (
@@ -338,6 +384,34 @@ function PendingCard({ req }: { req: ServerRequest }) {
   );
 }
 
+/** The requester's side of an escalated request: nothing to approve, only a way to withdraw it. */
+function WaitingCard({ req }: { req: ServerRequest }) {
+  const cancel = useApiMutation(
+    () => api(`/api/requests/${req.id}/cancel`, { method: "POST" }),
+    ["requests"],
+    () => toast.success("Request cancelled"),
+  );
+  const s = req.server;
+  return (
+    <div className="flex flex-wrap items-center gap-3 border-b border-border-soft px-4 py-3 last:border-0">
+      <span className="min-w-0 flex-1">
+        <span className="flex flex-wrap items-center gap-2">
+          <span className="font-mono text-[13px] font-semibold">{s?.slug ?? "server"}</span>
+          <Badge className="border-transparent bg-warn-bg font-semibold text-warn">waiting for Admin</Badge>
+          <span className="text-[11px] text-faint">{timeAgo(req.createdAt)}</span>
+        </span>
+        <span className="block truncate font-mono text-[11px] text-faint">{s ? configSummary(req) : req.reason}</span>
+        <span className="mt-0.5 block text-[11.5px] text-faint">
+          Local commands need the Admin's approval. You'll see the result here.
+        </span>
+      </span>
+      <Button size="sm" disabled={cancel.isPending} onClick={() => cancel.mutate(undefined)}>
+        Cancel
+      </Button>
+    </div>
+  );
+}
+
 function ResolvedRow({ req }: { req: ServerRequest }) {
   return (
     <div className="flex items-center gap-2.5 border-b border-border-soft px-4 py-2 last:border-0">
@@ -351,7 +425,8 @@ function ResolvedRow({ req }: { req: ServerRequest }) {
       </Badge>
       <span className="min-w-0 flex-1">
         <span className="block truncate text-xs">
-          <code className="font-mono font-semibold">{req.requestedByAgentSlug}</code>
+          {req.requestedByUsername && <span className="text-primary">from {req.requestedByUsername} · </span>}
+          <code className="font-mono font-semibold">{req.requestedByAgentSlug ?? req.requestedByUsername ?? "you"}</code>
           {" · "}
           {req.server ? req.server.slug : (req.reason ?? "freeform request")}
         </span>
@@ -371,9 +446,10 @@ export function ServerRequestsPanel() {
   const [showResolved, setShowResolved] = useState(false);
 
   const requests = data ?? [];
-  const pending = requests.filter((r) => r.status === "pending");
+  const pending = requests.filter(needsMyAction);
+  const waiting = requests.filter(isWaitingForAdmin);
   const resolved = requests.filter((r) => r.status !== "pending");
-  if (pending.length === 0 && resolved.length === 0) return null;
+  if (pending.length === 0 && waiting.length === 0 && resolved.length === 0) return null;
 
   return (
     <div className="mb-4">
@@ -384,10 +460,20 @@ export function ServerRequestsPanel() {
             <span className="text-[13px] font-semibold tracking-tight">
               {pending.length} pending request{pending.length === 1 ? "" : "s"}
             </span>
-            <span className="text-xs text-faint">agents are waiting on you</span>
+            <span className="text-xs text-faint">
+              {pending.some((r) => r.requestedByUsername) ? "agents and users are waiting on you" : "agents are waiting on you"}
+            </span>
           </div>
           {pending.map((req) => (
             <PendingCard key={req.id} req={req} />
+          ))}
+        </div>
+      )}
+
+      {waiting.length > 0 && (
+        <div className={cn("overflow-hidden rounded-[14px] border border-border bg-panel", pending.length > 0 && "mt-2")}>
+          {waiting.map((req) => (
+            <WaitingCard key={req.id} req={req} />
           ))}
         </div>
       )}

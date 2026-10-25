@@ -7,6 +7,7 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import type { Hono } from "hono";
 import { and, eq } from "drizzle-orm";
 import { closeDb, initDb, type Db } from "../src/db/index.js";
+import { defaultUserId } from "../src/core/users.js";
 import { agentServers, agents, serverRequests, servers } from "../src/db/schema.js";
 import {
   buildAgentServer,
@@ -18,7 +19,10 @@ import {
 import { decrypt, encrypt, loadOrCreateKey } from "../src/lib/crypto.js";
 import { writeSetting } from "../src/lib/settings.js";
 import { requestRoutes } from "../src/http/routes/requests.js";
+import { userScope } from "../src/core/userScope.js";
+import { mountAs } from "./helpers/mountAs.js";
 import { authRoutes } from "../src/http/routes/auth.js";
+import { AdminSessionStore } from "../src/http/adminAuth.js";
 import type { AppContext } from "../src/http/context.js";
 import type { UpstreamManager } from "../src/core/upstreamManager.js";
 
@@ -33,7 +37,6 @@ let tmp: string;
 /** No connections and no reconcile: nothing in these tests dials a real upstream. */
 const emptyManager = {
   get: () => undefined,
-  getBySlug: () => undefined,
   reconcile: async () => {},
 } as unknown as UpstreamManager;
 
@@ -91,17 +94,17 @@ beforeEach(() => {
   db = initDb(tmp);
   const now = Date.now();
   db.insert(agents)
-    .values({ slug: "boss", name: "Boss", role: "manager", tokenEnc: encrypt("boss-token"), createdAt: now })
+    .values({ userId: defaultUserId(db), slug: "boss", name: "Boss", role: "manager", tokenEnc: encrypt("boss-token"), createdAt: now })
     .run();
   db.insert(agents)
-    .values({ slug: "helper", name: "Helper", role: "standard", tokenEnc: encrypt("helper-token"), createdAt: now })
+    .values({ userId: defaultUserId(db), slug: "helper", name: "Helper", role: "standard", tokenEnc: encrypt("helper-token"), createdAt: now })
     .run();
 
   notifyAgent = vi.fn();
   deps = { db, manager: emptyManager, version: "test", notifyAgent, reconcile: async () => {}, probe: async () => "none" };
   // The hub is reached through adminDeps, which forwards an optional `kind` we don't assert on.
   const ctx = { db, manager: emptyManager, hub: { notifyAgent: (id: number) => notifyAgent(id) } };
-  api = requestRoutes(ctx as unknown as AppContext);
+  api = mountAs(db, requestRoutes(ctx as unknown as AppContext));
 });
 
 afterEach(() => {
@@ -164,7 +167,7 @@ describe(META_TOOL_REQUEST_SERVER, () => {
   });
 
   it("is hidden and refused when the admin disables requests", async () => {
-    writeSetting(db, "allowServerRequests", "0");
+    userScope(db, defaultUserId(db)).settings.set("allowServerRequests", false);
     const client = await connect("helper");
     const names = (await client.listTools()).tools.map((t) => t.name);
     expect(names).not.toContain(META_TOOL_REQUEST_SERVER);
@@ -217,6 +220,7 @@ describe(META_TOOL_REQUEST_STATUS, () => {
       type: "stdio",
       command: "npx",
       args: ["-y", "@playwright/mcp"],
+      cwd: null,
       url: null,
       authType: "none",
       envKeys: ["API_KEY"],
@@ -278,7 +282,7 @@ describe("POST /api/requests/:id/approve", () => {
     const id = await fileStdioRequest();
     const now = Date.now();
     db.insert(servers)
-      .values({ slug: "playwright", name: "Playwright", type: "stdio", command: "npx", createdAt: now, updatedAt: now })
+      .values({ userId: defaultUserId(db), slug: "playwright", name: "Playwright", type: "stdio", command: "npx", createdAt: now, updatedAt: now })
       .run();
 
     const { status, body } = await apiCall("POST", `/${id}/approve`);
@@ -357,9 +361,13 @@ describe("POST /api/requests/:id/approve", () => {
 
 describe("allowServerRequests setting", () => {
   /** The toggle the UI reads from /api/auth/me and writes to /api/auth/settings. */
-  function authApi(): Hono {
-    const adminSessions = { has: () => true, create: () => "sid", delete: () => {}, deleteAll: () => {} };
-    return authRoutes({ db, manager: emptyManager, adminSessions } as unknown as AppContext);
+  function authApi(): Pick<Hono, "request"> {
+    const adminSessions = new AdminSessionStore(db);
+    const app = authRoutes({ db, manager: emptyManager, adminSessions } as unknown as AppContext);
+    const cookie = `sb_session=${adminSessions.create(defaultUserId(db))}`;
+    return {
+      request: (input, init) => app.request(input, { ...init, headers: { ...(init?.headers as object), Cookie: cookie } }),
+    } as Pick<Hono, "request">;
   }
 
   it("round-trips through /api/auth and gates the tools", async () => {

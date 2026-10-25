@@ -1,14 +1,14 @@
 import { useState } from "react";
-import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { api } from "@/lib/api";
 import { useApiMutation, useAuthMe, useLogConfig } from "@/lib/hooks";
-import type { LogConfig } from "@/lib/types";
+import type { LoginMode, LogConfig } from "@/lib/types";
+import { cn } from "@/lib/utils";
 import { PageBar } from "@/components/Layout";
-import { Button, Field, Input, Switch } from "@/components/ui";
+import { Button, Field, Input, Switch, Tabs, Textarea } from "@/components/ui";
 import { ThemeToggle } from "@/components/ThemeToggle";
 
-function ChangePasswordForm({ authDisabled }: { authDisabled: boolean }) {
+function ChangePasswordForm() {
   const [currentPassword, setCurrentPassword] = useState("");
   const [newPassword, setNewPassword] = useState("");
 
@@ -16,7 +16,7 @@ function ChangePasswordForm({ authDisabled }: { authDisabled: boolean }) {
     () =>
       api("/api/auth/change-password", {
         method: "POST",
-        json: authDisabled ? { newPassword } : { currentPassword, newPassword },
+        json: { currentPassword, newPassword },
       }),
     ["auth"],
     () => {
@@ -27,19 +27,16 @@ function ChangePasswordForm({ authDisabled }: { authDisabled: boolean }) {
   );
 
   return (
-    <div className="mt-4 flex max-w-sm flex-col gap-3 border-t border-border-soft pt-4">
-      <h3 className="text-sm font-semibold">Change password</h3>
-      {!authDisabled && (
-        <Field label="Current password">
-          <Input
-            type="password"
-            className="font-sans"
-            autoComplete="current-password"
-            value={currentPassword}
-            onChange={(e) => setCurrentPassword(e.target.value)}
-          />
-        </Field>
-      )}
+    <div className="flex max-w-sm flex-col gap-3">
+      <Field label="Current password">
+        <Input
+          type="password"
+          className="font-sans"
+          autoComplete="current-password"
+          value={currentPassword}
+          onChange={(e) => setCurrentPassword(e.target.value)}
+        />
+      </Field>
       <Field label="New password" hint="at least 4 characters">
         <Input
           type="password"
@@ -52,7 +49,7 @@ function ChangePasswordForm({ authDisabled }: { authDisabled: boolean }) {
       <div>
         <Button
           variant="primary"
-          disabled={change.isPending || newPassword.length < 4 || (!authDisabled && !currentPassword)}
+          disabled={change.isPending || newPassword.length < 4 || !currentPassword}
           onClick={() => change.mutate(undefined)}
         >
           Change password
@@ -83,7 +80,36 @@ function InstanceNameForm({ current }: { current: string | null }) {
   );
 }
 
-function LogSettingsForm() {
+/** Whether my own requests and responses are stored: mine to decide, since the log rows are mine. */
+function PayloadCaptureToggle() {
+  const { data: config } = useLogConfig();
+  const save = useApiMutation(
+    (capturePayloads: boolean) => api("/api/logs/settings", { method: "PUT", json: { capturePayloads } }),
+    ["log-config", "logs", "auth"],
+    () => toast.success("Saved"),
+  );
+  if (!config) return null;
+  return (
+    <div className="flex items-center gap-3">
+      <Switch
+        checked={config.capturePayloads}
+        onChange={(capturePayloads) => save.mutate(capturePayloads)}
+        label="Record request and response payloads"
+      />
+      <div>
+        <div className="text-[13px] font-medium">Record request and response payloads</div>
+        <div className="text-xs text-faint">
+          {config.capturePayloads
+            ? "Full JSON-RPC frames from your agents are stored, so tool arguments and results — including any secrets an agent passes through — sit in the database unredacted."
+            : "Only metadata is stored: who called what, when, how long it took, and how big the frames were."}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/** Retention and the payload cap apply to everyone's logs, so they are the Admin's. */
+function RetentionForm() {
   const { data: config } = useLogConfig();
   const [hours, setHours] = useState<string | null>(null);
   const [maxKb, setMaxKb] = useState<string | null>(null);
@@ -101,32 +127,10 @@ function LogSettingsForm() {
 
   return (
     <>
-      <div className="flex items-center gap-3">
-        <Switch
-          checked={config.capturePayloads}
-          onChange={(capturePayloads) => save.mutate({ capturePayloads })}
-          label="Record request and response payloads"
-        />
-        <div>
-          <div className="text-[13px] font-medium">Record request and response payloads</div>
-          <div className="text-xs text-faint">
-            {config.capturePayloads
-              ? "Full JSON-RPC frames are stored, so tool arguments and results — including any secrets an agent passes through — sit in the database unredacted."
-              : "Only metadata is stored: who called what, when, how long it took, and how big the frames were."}
-          </div>
-        </div>
-      </div>
-
-      <div className="mt-4 flex max-w-lg flex-wrap items-end gap-2 border-t border-border-soft pt-4">
+      <div className="flex max-w-lg flex-wrap items-end gap-2">
         <div className="w-32">
           <Field label="Keep for" hint="hours">
-            <Input
-              type="number"
-              min={1}
-              max={8760}
-              value={hoursValue}
-              onChange={(e) => setHours(e.target.value)}
-            />
+            <Input type="number" min={1} max={8760} value={hoursValue} onChange={(e) => setHours(e.target.value)} />
           </Field>
         </div>
         <div className="w-32">
@@ -147,23 +151,119 @@ function LogSettingsForm() {
         </Button>
       </div>
       <p className="mt-2 text-xs text-faint">
-        Older requests are deleted automatically; shortening the window prunes them right away. Frames larger than the
-        cap are clipped, but their true size is still recorded.
+        Applies to every user's logs. Older requests are deleted automatically; shortening the window prunes them right away.
+        Frames larger than the cap are clipped, but their true size is still recorded.
       </p>
     </>
   );
 }
 
-export function SettingsPage() {
-  const qc = useQueryClient();
-  const { data: auth } = useAuthMe();
-  const authDisabled = auth?.authDisabled ?? false;
+/** Password, or Cloudflare Access in front of the whole UI. Switching to Access has to be done from behind Access. */
+function LoginModeForm({ mode, teamDomain, audTags, adminEmail }: { mode: LoginMode; teamDomain: string; audTags: string[]; adminEmail: string | null }) {
+  const [picked, setPicked] = useState<LoginMode>(mode);
+  const [domain, setDomain] = useState(teamDomain);
+  const [tags, setTags] = useState(audTags.join("\n"));
 
-  const setAuthDisabled = useApiMutation(
-    (disabled: boolean) => api("/api/auth/settings", { method: "POST", json: { authDisabled: disabled } }),
+  const save = useApiMutation(
+    () =>
+      api("/api/auth/settings", {
+        method: "POST",
+        json:
+          picked === "cloudflare"
+            ? {
+                loginMode: "cloudflare",
+                accessTeamDomain: domain.trim(),
+                accessAudTags: tags
+                  .split(/[\s,]+/)
+                  .map((t) => t.trim())
+                  .filter(Boolean),
+              }
+            : { loginMode: "password" },
+      }),
     ["auth"],
-    () => toast.success("Saved"),
+    () => toast.success(picked === "cloudflare" ? "Cloudflare Access is on" : "Back to password sign-in"),
   );
+
+  const tagList = tags.split(/[\s,]+/).filter(Boolean);
+  const changed = picked !== mode || (picked === "cloudflare" && (domain.trim() !== teamDomain || tagList.join() !== audTags.join()));
+  const ready = picked === "password" || (domain.trim() !== "" && tagList.length > 0);
+
+  return (
+    <div className="flex flex-col gap-3">
+      <div className="max-w-xs">
+        <Tabs
+          value={picked}
+          onChange={(v) => {
+            setPicked(v);
+            save.reset();
+          }}
+          options={[
+            { value: "password", label: "Password" },
+            { value: "cloudflare", label: "Cloudflare Access" },
+          ]}
+        />
+      </div>
+      {picked === "cloudflare" ? (
+        <>
+          <p className="text-xs leading-relaxed text-muted-fg">
+            Cloudflare Access signs everyone in, and a user's email decides which switchboard user they are. Password login is
+            off while this is on. Open the switchboard through its Access-protected address to save these settings:
+            they are only accepted from a request that carries a valid Access token for your own email
+            {adminEmail ? <> (<span className="font-mono">{adminEmail}</span>)</> : ", which isn't set yet. Add it on the Users page first"}.
+          </p>
+          <div className="grid max-w-lg gap-3 sm:grid-cols-2">
+            <Field label="Team domain" hint="from Zero Trust settings">
+              <Input value={domain} onChange={(e) => setDomain(e.target.value)} placeholder="myteam.cloudflareaccess.com" spellCheck={false} />
+            </Field>
+            <Field label="Application AUD tag" hint="one per line">
+              <Textarea rows={2} value={tags} onChange={(e) => setTags(e.target.value)} placeholder="32-character tag" spellCheck={false} />
+            </Field>
+          </div>
+          <p className="rounded-[10px] bg-warn-bg px-3 py-2 text-xs leading-relaxed text-muted-fg">
+            <b className="font-semibold text-foreground">In Access mode, don't expose the admin port on your LAN.</b> Anything
+            that reaches the port directly skips Access.
+          </p>
+        </>
+      ) : (
+        mode === "cloudflare" && (
+          <p className="text-xs leading-relaxed text-muted-fg">
+            Users sign in with a username and password again. Anyone who never chose a password needs a setup code from the Users
+            page.
+          </p>
+        )
+      )}
+      {save.isError && (
+        <p role="alert" className="rounded-[10px] bg-err-bg px-3 py-2 text-xs leading-relaxed text-err">
+          {save.error instanceof Error ? save.error.message : "Could not save"}
+        </p>
+      )}
+      {(picked === "cloudflare" || mode === "cloudflare") && (
+        <div>
+          <Button variant="primary" disabled={save.isPending || !changed || !ready} onClick={() => save.mutate(undefined)}>
+            {picked === "cloudflare" ? (mode === "cloudflare" ? "Save Access settings" : "Switch to Cloudflare Access") : "Switch to password sign-in"}
+          </Button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function SectionHeading({ title, sub }: { title: string; sub: string }) {
+  return (
+    <div className="mt-6 mb-2.5 first:mt-0">
+      <h2 className="text-[11px] font-semibold uppercase tracking-wider text-faint">{title}</h2>
+      <p className="text-xs text-faint">{sub}</p>
+    </div>
+  );
+}
+
+const CARD = "rounded-[14px] border border-border bg-panel px-4 py-4";
+
+export function SettingsPage() {
+  const { data: auth } = useAuthMe();
+  const isAdmin = auth?.user?.role === "admin";
+  const accessMode = auth?.loginMode === "cloudflare";
+
   const setAutoEnable = useApiMutation(
     (on: boolean) => api("/api/auth/settings", { method: "POST", json: { autoEnableNewServers: on } }),
     ["auth"],
@@ -175,19 +275,14 @@ export function SettingsPage() {
     () => toast.success("Saved"),
   );
 
-  const logout = async () => {
-    await api("/api/auth/logout", { method: "POST" });
-    await qc.invalidateQueries({ queryKey: ["auth"] });
-  };
-
   return (
     <>
       <PageBar title="Settings" />
 
-      <div className="rounded-[14px] border border-border bg-panel px-4 py-4">
-        <h2 className="mb-3 text-[15px] font-semibold tracking-tight">General</h2>
-        <InstanceNameForm key={auth?.instanceName ?? ""} current={auth?.instanceName ?? null} />
-        <div className="mt-4 flex items-center justify-between gap-3 border-t border-border-soft pt-4">
+      <SectionHeading title="Yours" sub={`For ${auth?.user?.username ?? "you"}: your servers, agents and logs. Nobody else is affected.`} />
+      <div className={CARD}>
+        <h2 className="mb-3 text-[15px] font-semibold tracking-tight">Preferences</h2>
+        <div className="flex items-center justify-between gap-3">
           <div>
             <div className="text-[13px] font-medium">Appearance</div>
             <div className="text-xs text-faint">System follows your OS light/dark setting.</div>
@@ -198,13 +293,13 @@ export function SettingsPage() {
           <Switch
             checked={auth?.autoEnableNewServers ?? false}
             onChange={(v) => setAutoEnable.mutate(v)}
-            label="Enable new servers for all agents"
+            label="Enable new servers for all my agents"
           />
           <div>
-            <div className="text-[13px] font-medium">Enable new servers for all agents</div>
+            <div className="text-[13px] font-medium">Enable new servers for all my agents</div>
             <div className="text-xs text-faint">
-              When on, a newly added server is switched on for every agent automatically. When off, servers start
-              disabled and you opt them in per agent.
+              When on, a server you add (or accept from someone) is switched on for every one of your agents automatically.
+              When off, servers start disabled and you opt them in per agent.
             </div>
           </div>
         </div>
@@ -217,55 +312,52 @@ export function SettingsPage() {
           <div>
             <div className="text-[13px] font-medium">Allow agents to request servers</div>
             <div className="text-xs text-faint">
-              Adds a request tool to every agent so they can ask you for new MCP servers.
+              Adds a request tool to each of your agents so they can ask you for new MCP servers.
             </div>
           </div>
         </div>
       </div>
 
-      <div className="mt-4 rounded-[14px] border border-border bg-panel px-4 py-4">
+      <div className={cn(CARD, "mt-4")}>
         <h2 className="mb-3 text-[15px] font-semibold tracking-tight">Logs</h2>
-        <LogSettingsForm />
+        <PayloadCaptureToggle />
       </div>
 
-      <div className="mt-4 rounded-[14px] border border-border bg-panel px-4 py-4">
-        <h2 className="text-[15px] font-semibold tracking-tight">Security</h2>
-        <div className="mt-3 flex items-center gap-3">
-          <Switch
-            checked={!authDisabled}
-            onChange={(requireAuth) => {
-              if (
-                requireAuth ||
-                confirm(
-                  "Disable web UI authentication? Anyone who can reach this address gets full admin access. Only do this on a trusted network.",
-                )
-              ) {
-                setAuthDisabled.mutate(!requireAuth);
-              }
-            }}
-            label="Require password to access the web UI"
-          />
-          <div>
-            <div className="text-[13px] font-medium">Require password to access the web UI</div>
-            <div className="text-xs text-faint">
-              {authDisabled
-                ? "Auth is off — anyone who can reach this address has full admin access. Trusted networks only."
-                : "You stay logged in for 365 days per browser; agents always use their own bearer tokens."}
-            </div>
-          </div>
-        </div>
-        <ChangePasswordForm authDisabled={authDisabled} />
-      </div>
-
-      {!authDisabled && (
-        <div className="mt-4 rounded-[14px] border border-border bg-panel px-4 py-4">
-          <h2 className="text-[15px] font-semibold tracking-tight">Session</h2>
-          <p className="mt-1 mb-3 text-xs text-faint">You're logged in as the switchboard admin on this browser.</p>
-          <Button onClick={() => void logout()}>Log out</Button>
+      {!accessMode && (
+        <div className={cn(CARD, "mt-4")}>
+          <h2 className="mb-3 text-[15px] font-semibold tracking-tight">Change password</h2>
+          <ChangePasswordForm />
         </div>
       )}
 
-      <div className="mt-4 rounded-[14px] border border-border bg-panel px-4 py-4 text-xs leading-relaxed text-muted-fg">
+      {isAdmin && (
+        <>
+          <SectionHeading title="Instance" sub="Admin only. These apply to everyone on this switchboard." />
+          <div className={CARD}>
+            <h2 className="mb-3 text-[15px] font-semibold tracking-tight">General</h2>
+            <InstanceNameForm key={auth?.instanceName ?? ""} current={auth?.instanceName ?? null} />
+          </div>
+
+          <div className={cn(CARD, "mt-4")}>
+            <h2 className="mb-3 text-[15px] font-semibold tracking-tight">Logs</h2>
+            <RetentionForm />
+          </div>
+
+          <div className={cn(CARD, "mt-4")}>
+            <h2 className="mb-3 text-[15px] font-semibold tracking-tight">Sign-in</h2>
+            <LoginModeForm
+              // Remount when the server's saved values change, so the form never shows stale drafts.
+              key={`${auth?.loginMode}|${auth?.access?.teamDomain}|${auth?.access?.audTags?.join()}`}
+              mode={auth?.loginMode ?? "password"}
+              teamDomain={auth?.access?.teamDomain ?? ""}
+              audTags={auth?.access?.audTags ?? []}
+              adminEmail={auth?.user?.email ?? null}
+            />
+          </div>
+        </>
+      )}
+
+      <div className={cn(CARD, "mt-6 text-xs leading-relaxed text-muted-fg")}>
         <h2 className="mb-1 text-[15px] font-semibold tracking-tight text-foreground">About</h2>
         <p>
           MCP Switchboard v{__APP_VERSION__} · data lives in <code className="font-mono">data/</code> next to the server (SQLite + encryption

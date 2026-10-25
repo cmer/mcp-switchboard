@@ -7,6 +7,9 @@ export interface ParsedServer {
   command?: string;
   args?: string[];
   env?: Record<string, string>;
+  /** Not parsed from pasted configs; set when a server added in the UI is filed as a request. */
+  cwd?: string | null;
+  description?: string | null;
   url?: string;
   authType: "none" | "bearer" | "headers" | "oauth";
   bearerToken?: string;

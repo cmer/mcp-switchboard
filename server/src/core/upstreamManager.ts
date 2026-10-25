@@ -1,6 +1,5 @@
-import { eq } from "drizzle-orm";
 import type { Db } from "../db/index.js";
-import { servers } from "../db/schema.js";
+import { markServerStreamableHttp, runnableServers, serverById } from "./systemView.js";
 import { UpstreamConnection, type ChangedKind, type UpstreamEvents, type UpstreamState } from "./upstreamConnection.js";
 
 export class UpstreamManager {
@@ -20,18 +19,15 @@ export class UpstreamManager {
       onCachesChanged: (id, kind) => this.onCachesChanged(id, kind),
       onStateChanged: (id, state) => this.onStateChanged(id, state),
       makeOAuthProvider: this.makeOAuthProvider,
-      onLegacySseFallback: (id) => {
-        this.db.update(servers).set({ type: "http", updatedAt: Date.now() }).where(eq(servers.id, id)).run();
-        // The connection adopts this row, so reconcile() sees a matching updatedAt and won't restart it.
-        return this.db.select().from(servers).where(eq(servers.id, id)).get();
-      },
+      // The connection adopts the returned row, so reconcile() sees a matching updatedAt and won't restart it.
+      onLegacySseFallback: (id) => markServerStreamableHttp(this.db, id),
     };
   }
 
   /** Bring live connections in line with the DB (call at boot and after any server mutation). */
   async reconcile(): Promise<void> {
-    const rows = this.db.select().from(servers).all();
-    const wanted = new Map(rows.filter((r) => r.enabled).map((r) => [r.id, r]));
+    // Runnable = switched on AND owned by someone who isn't disabled (a disabled user's servers go dark).
+    const wanted = new Map(runnableServers(this.db).map((r) => [r.id, r]));
 
     // stop & drop connections that are no longer wanted
     for (const [id, conn] of this.connections) {
@@ -60,18 +56,11 @@ export class UpstreamManager {
     return this.connections.get(serverId);
   }
 
-  getBySlug(slug: string): UpstreamConnection | undefined {
-    for (const conn of this.connections.values()) {
-      if (conn.row.slug === slug) return conn;
-    }
-    return undefined;
-  }
-
   async restart(serverId: number): Promise<boolean> {
     const conn = this.connections.get(serverId);
     if (!conn) {
       // may have been disabled; try reconcile in case it was re-enabled
-      const row = this.db.select().from(servers).where(eq(servers.id, serverId)).get();
+      const row = serverById(this.db, serverId);
       if (row?.enabled) {
         await this.reconcile();
         return this.connections.has(serverId);

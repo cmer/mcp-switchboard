@@ -9,9 +9,10 @@ import { closeDb, initDb, type Db } from "../src/db/index.js";
 import { requestLogs, type AgentRow, type RequestLogRow } from "../src/db/schema.js";
 import { RequestLogger, LOG_SETTING_KEYS } from "../src/core/requestLogger.js";
 import { writeSetting } from "../src/lib/settings.js";
+import { userScope } from "../src/core/userScope.js";
 import { encrypt, loadOrCreateKey } from "../src/lib/crypto.js";
 
-const AGENT: AgentRow = { id: 1, slug: "claude", name: "Claude", tokenEnc: "x", createdAt: 0 };
+const AGENT: AgentRow = { id: 1, userId: 1, slug: "claude", name: "Claude", tokenEnc: "x", createdAt: 0 };
 
 /** Stand-in transport: `sent` collects what the switchboard wrote back to the agent. */
 function fakeTransport(): Transport & { sent: JSONRPCMessage[] } {
@@ -198,8 +199,7 @@ describe("RequestLogger", () => {
   });
 
   it("records byte counts but no payloads when capture is off", async () => {
-    writeSetting(db, LOG_SETTING_KEYS.capturePayloads, "0");
-    logger.reloadConfig();
+    userScope(db, AGENT.userId).settings.set("capturePayloads", false);
 
     await roundTrip(
       { jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "github__x", arguments: { a: 1 } } },
@@ -250,7 +250,7 @@ describe("RequestLogger", () => {
 
   it("notifies subscribers on insert and on completion", async () => {
     const events: string[] = [];
-    const unsubscribe = logger.subscribe((e) => events.push(`${e.type}:${e.row.status}`));
+    const unsubscribe = logger.subscribe(AGENT.userId, (e) => events.push(`${e.type}:${e.row.status}`));
 
     await roundTrip(
       { jsonrpc: "2.0", id: 1, method: "tools/list" },

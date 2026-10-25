@@ -1,7 +1,8 @@
 import { eq } from "drizzle-orm";
 import { auth, type OAuthClientProvider } from "@modelcontextprotocol/sdk/client/auth.js";
 import type { Db } from "../db/index.js";
-import { oauthCredentials, servers } from "../db/schema.js";
+import { oauthCredentials } from "../db/schema.js";
+import { serverById } from "./systemView.js";
 
 const MIN_DELAY_MS = 1_000;
 const RETRY_BACKOFF_MS = 60_000;
@@ -79,7 +80,7 @@ export class TokenRefresher {
     if (this.refreshing.has(serverId)) return;
     this.refreshing.add(serverId);
     try {
-      const server = this.deps.db.select().from(servers).where(eq(servers.id, serverId)).get();
+      const server = serverById(this.deps.db, serverId);
       if (!server?.url || server.authType !== "oauth" || !server.enabled) return;
 
       const provider = this.deps.makeProvider(serverId);

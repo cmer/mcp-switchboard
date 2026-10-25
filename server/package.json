@@ -1,6 +1,6 @@
 {
   "name": "@cmer/mcp-switchboard",
-  "version": "1.6.0",
+  "version": "2.0.0",
   "type": "module",
   "description": "Self-hosted MCP switchboard: configure MCP servers once, give each coding agent its own endpoint and its own set of tools.",
   "keywords": [
@@ -47,6 +47,7 @@
     "better-sqlite3": "^12.0.0",
     "drizzle-orm": "^0.44.0",
     "hono": "^4.11.0",
+    "jose": "^6.2.12",
     "zod": "^3.25.0"
   },
   "devDependencies": {

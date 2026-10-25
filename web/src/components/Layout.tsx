@@ -1,8 +1,9 @@
 import type { ReactNode } from "react";
 import { NavLink, useLocation } from "react-router";
-import { Bot, ScrollText, Server, Settings } from "lucide-react";
-import { useAuthMe, useServerRequests } from "@/lib/hooks";
+import { Bot, LogOut, ScrollText, Server, Settings, Users } from "lucide-react";
+import { useAuthMe, useLogout, useServerRequests } from "@/lib/hooks";
 import { cn } from "@/lib/utils";
+import { needsMyAction } from "@/components/ServerRequests";
 
 function BrandMark() {
   return (
@@ -29,12 +30,19 @@ const NAV = [
   { to: "/settings", label: "Settings", icon: Settings },
 ];
 
+/** Only the Admin manages users. Sits above Settings, with the other things you configure. */
+const USERS_NAV = { to: "/users", label: "Users", icon: Users };
+
 export function Layout({ children }: { children: ReactNode }) {
   const { data: auth } = useAuthMe();
   const { data: requests } = useServerRequests();
   const instanceName = auth?.instanceName ?? null;
   // Requests are reviewed on the Servers page, so that's where the badge points.
-  const pending = (requests ?? []).filter((r) => r.status === "pending").length;
+  // Your own requests waiting on the Admin aren't yours to act on, so they don't count.
+  const pending = (requests ?? []).filter(needsMyAction).length;
+  const user = auth?.user ?? null;
+  const logout = useLogout();
+  const nav = user?.role === "admin" ? [...NAV.slice(0, 3), USERS_NAV, ...NAV.slice(3)] : NAV;
   // The log table needs more room than the forms-shaped pages.
   const wide = useLocation().pathname.startsWith("/logs");
   return (
@@ -48,7 +56,7 @@ export function Layout({ children }: { children: ReactNode }) {
           </div>
         </div>
         <nav className="flex flex-col gap-0.5">
-          {NAV.map(({ to, label, icon: Icon }) => (
+          {nav.map(({ to, label, icon: Icon }) => (
             <NavLink
               key={to}
               to={to}
@@ -76,7 +84,31 @@ export function Layout({ children }: { children: ReactNode }) {
             </NavLink>
           ))}
         </nav>
-        <div className="mt-auto px-2.5 font-mono text-[11px] text-faint">v{__APP_VERSION__}</div>
+        <div className="mt-auto flex flex-col gap-2 px-2.5">
+          {user && (
+            <div className="flex items-center gap-2 border-t border-border-soft pt-3">
+              <span
+                aria-hidden="true"
+                className="flex size-6 shrink-0 items-center justify-center rounded-full bg-primary-soft text-[11px] font-semibold text-primary"
+              >
+                {user.username[0]?.toUpperCase()}
+              </span>
+              <span className="min-w-0 flex-1">
+                <span className="block truncate text-[12.5px] font-semibold leading-tight" title={user.email ?? undefined}>
+                  {user.username}
+                </span>
+                {user.role === "admin" && <span className="block text-[10.5px] leading-tight text-faint">Admin</span>}
+              </span>
+              <button
+                onClick={() => void logout()}
+                className="flex cursor-pointer items-center gap-1 rounded-md px-1 py-0.5 text-[11.5px] font-medium text-muted-fg hover:text-foreground focus-visible:outline-2 focus-visible:outline-primary"
+              >
+                <LogOut size={12} /> Log out
+              </button>
+            </div>
+          )}
+          <div className="font-mono text-[11px] text-faint">v{__APP_VERSION__}</div>
+        </div>
       </aside>
       <main className="min-w-0 flex-1 px-5 py-6 sm:px-7">
         <div className={cn("mx-auto", wide ? "max-w-5xl" : "max-w-3xl")}>{children}</div>

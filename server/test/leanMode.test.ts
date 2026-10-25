@@ -7,6 +7,7 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { and, eq } from "drizzle-orm";
 import type { Tool } from "@modelcontextprotocol/sdk/types.js";
 import { closeDb, initDb, type Db } from "../src/db/index.js";
+import { defaultUserId } from "../src/core/users.js";
 import { agentServers, agents, servers } from "../src/db/schema.js";
 import {
   buildAgentServer,
@@ -19,7 +20,7 @@ import {
   type AgentServerDeps,
 } from "../src/core/agentServerFactory.js";
 import { encrypt, loadOrCreateKey } from "../src/lib/crypto.js";
-import { writeSetting } from "../src/lib/settings.js";
+import { userScope } from "../src/core/userScope.js";
 import type { UpstreamConnection } from "../src/core/upstreamConnection.js";
 import type { UpstreamManager } from "../src/core/upstreamManager.js";
 
@@ -180,15 +181,15 @@ beforeEach(() => {
     [4, "quirky", null],
   ] as const) {
     db.insert(servers)
-      .values({ id, slug, name: slug, description, type: "http", url: `https://${slug}.test/mcp`, createdAt: now, updatedAt: now })
+      .values({ userId: defaultUserId(db), id, slug, name: slug, description, type: "http", url: `https://${slug}.test/mcp`, createdAt: now, updatedAt: now })
       .run();
   }
 
   db.insert(agents)
-    .values({ id: 1, slug: "lean", name: "Lean", toolMode: "lean", tokenEnc: encrypt("lean-token"), createdAt: now })
+    .values({ userId: defaultUserId(db), id: 1, slug: "lean", name: "Lean", toolMode: "lean", tokenEnc: encrypt("lean-token"), createdAt: now })
     .run();
   db.insert(agents)
-    .values({ id: 2, slug: "fully", name: "Fully", toolMode: "full", tokenEnc: encrypt("full-token"), createdAt: now })
+    .values({ userId: defaultUserId(db), id: 2, slug: "fully", name: "Fully", toolMode: "full", tokenEnc: encrypt("full-token"), createdAt: now })
     .run();
 
   // The lean agent gets gmail + github + quirky; "secret" is deliberately switched off for it.
@@ -212,7 +213,6 @@ beforeEach(() => {
   const all = Object.values(conns);
   const manager = {
     get: (id: number) => all.find((c) => c.serverId === id),
-    getBySlug: (slug: string) => all.find((c) => c.row.slug === slug),
   } as unknown as UpstreamManager;
 
   deps = { db, manager, version: "test", notifyAgent: vi.fn(), reconcile: async () => {}, probe: async () => "none" };
@@ -237,7 +237,7 @@ describe("lean tools/list", () => {
   });
 
   it("drops the request tools when the admin switched them off", async () => {
-    writeSetting(db, "allowServerRequests", "0");
+    userScope(db, defaultUserId(db)).settings.set("allowServerRequests", false);
     const client = await connect("lean");
     expect(await toolNames(client)).toEqual([
       META_TOOL_SEARCH_TOOLS,

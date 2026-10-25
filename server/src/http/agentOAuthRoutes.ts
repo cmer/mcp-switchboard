@@ -1,16 +1,17 @@
 import { Hono, type Context } from "hono";
 import { bodyLimit } from "hono/body-limit";
 import { cors } from "hono/cors";
-import { eq } from "drizzle-orm";
 import { OAuthClientMetadataSchema } from "@modelcontextprotocol/sdk/shared/auth.js";
 import type { Db } from "../db/index.js";
-import { agents, type AgentOAuthClientRow, type AgentRow } from "../db/schema.js";
+import type { AgentOAuthClientRow, AgentRow } from "../db/schema.js";
 import { AgentOAuthStore, type TokenEndpointAuthMethod } from "../oauth/agentOAuth.js";
 import { renderConsentPage, renderErrorPage } from "../oauth/consentPage.js";
+import { endpointAgent, endpointFromPath, endpointPath, type AgentEndpoint } from "./agentEndpoint.js";
 
 /**
  * The switchboard as an OAuth 2.1 authorization server for its own agent endpoints, so clients that
- * can only do OAuth (Claude Desktop / claude.ai connectors) can reach `/mcp/<slug>`. Approval is a
+ * can only do OAuth (Claude Desktop / claude.ai connectors) can reach `/mcp/<username>/<agent-slug>`
+ * (and the legacy `/mcp/<agent-slug>`). Approval is a
  * one-time pairing code minted in the admin UI and typed on the consent page: it proves the admin
  * started the connection, names the agent, and keeps both the admin password and the agent's
  * long-lived token off a page that anyone can link to.
@@ -60,10 +61,6 @@ function sameHost(origin: string, host: string): boolean {
   }
 }
 
-export function resourceMetadataUrl(base: string, slug: string): string {
-  return `${base}/.well-known/oauth-protected-resource/mcp/${slug}`;
-}
-
 const LOOPBACK_HOSTS = new Set(["localhost", "127.0.0.1", "[::1]"]);
 const FORBIDDEN_SCHEMES = new Set(["javascript:", "data:", "vbscript:", "file:", "blob:", "about:", "ftp:", "ws:", "wss:"]);
 
@@ -97,11 +94,13 @@ export function redirectUriMatches(registered: string, presented: string): boole
   }
 }
 
-/** `<anything>/mcp/<slug>` → slug. The origin isn't compared: behind a proxy it is ours to guess. */
-export function slugFromResource(resource: string): string | null {
+/**
+ * `<anything>/mcp/<username>/<agent>` or the legacy `<anything>/mcp/<agent>` → the endpoint it names.
+ * The origin isn't compared: behind a proxy it is ours to guess.
+ */
+export function slugFromResource(resource: string): AgentEndpoint | null {
   try {
-    const match = /^\/mcp\/([a-z0-9-]{1,64})\/?$/.exec(new URL(resource).pathname);
-    return match?.[1] ?? null;
+    return endpointFromPath(new URL(resource).pathname);
   } catch {
     return null;
   }
@@ -198,19 +197,26 @@ export function agentOAuthRoutes(deps: AgentOAuthDeps): Hono {
 
   /* ---------- discovery ---------- */
 
-  // RFC 9728, path-suffixed form: the 401 from /mcp/<slug> points clients straight here.
-  app.get("/.well-known/oauth-protected-resource/mcp/:slug", (c) => {
-    const slug = c.req.param("slug");
-    const agent = db.select().from(agents).where(eq(agents.slug, slug)).get();
-    if (!agent) return c.json({ error: "Unknown agent" }, 404);
+  // RFC 9728, path-suffixed form: the 401 from /mcp/... points clients straight here. Both URL forms,
+  // and `resource` echoes the one asked for — it must match the URL the client was configured with.
+  // The answer is the same for any well-formed path, resolvable or not (and carries no agent name),
+  // like the MCP endpoint's uniform 401: this must not reveal which users and agents exist.
+  const protectedResource = (c: Context, endpoint: AgentEndpoint) => {
+    if (!endpointFromPath(`/mcp/${endpointPath(endpoint)}`)) return c.json({ error: "Not found" }, 404);
     const b = base(c);
     return c.json({
-      resource: `${b}/mcp/${slug}`,
+      resource: `${b}/mcp/${endpointPath(endpoint)}`,
       authorization_servers: [b],
       bearer_methods_supported: ["header"],
-      resource_name: `MCP Switchboard — ${agent.name}`,
+      resource_name: "MCP Switchboard",
     });
-  });
+  };
+  app.get("/.well-known/oauth-protected-resource/mcp/:username/:agentSlug", (c) =>
+    protectedResource(c, { username: c.req.param("username"), agentSlug: c.req.param("agentSlug") }),
+  );
+  app.get("/.well-known/oauth-protected-resource/mcp/:agentSlug", (c) =>
+    protectedResource(c, { username: null, agentSlug: c.req.param("agentSlug") }),
+  );
 
   // RFC 8414. The issuer is the bare origin, so this root path is where every client looks.
   app.get("/.well-known/oauth-authorization-server", (c) => {
@@ -305,9 +311,11 @@ export function agentOAuthRoutes(deps: AgentOAuthDeps): Hono {
 
     let agent: AgentRow | null = null;
     if (params.resource) {
-      const slug = slugFromResource(params.resource);
-      agent = slug ? (db.select().from(agents).where(eq(agents.slug, slug)).get() ?? null) : null;
-      if (!agent) return fail("invalid_target", "resource must be a switchboard agent endpoint (/mcp/<agent-slug>)");
+      const endpoint = slugFromResource(params.resource);
+      agent = endpoint ? (endpointAgent(db, endpoint) ?? null) : null;
+      if (!agent) {
+        return fail("invalid_target", "resource must be a switchboard agent endpoint (/mcp/<username>/<agent-slug>)");
+      }
     }
 
     const echoed: Record<string, string> = {};
