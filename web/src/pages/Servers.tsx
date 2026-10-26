@@ -4,6 +4,7 @@ import { ArrowLeft, Check, ChevronDown, ChevronUp, Inbox, Plus, Share2, Users } 
 import { toast } from "sonner";
 import { api } from "@/lib/api";
 import { useApiMutation, useAuthMe, useDirectory, useServerLogs, useServers, useServerTools, useShares } from "@/lib/hooks";
+import { maskedSecretLines, parseSecretLines, secretLinesHint } from "@/lib/secretLines";
 import { SERVER_TEMPLATES, templatePayload, templateReady, type ServerTemplate } from "@/lib/templates";
 import type { OwnedShare, ReceivedShare, ServerInfo, ShareOffer } from "@/lib/types";
 import { cn, timeAgo } from "@/lib/utils";
@@ -151,13 +152,13 @@ function ServerDialog({
       kind: editing.type === "stdio" ? "stdio" : "remote",
       command: editing.command ?? "",
       args: editing.args.join("\n"),
-      env: "",
+      env: maskedSecretLines(editing.envKeys),
       cwd: editing.cwd ?? "",
       url: editing.url ?? "",
       remoteType: editing.type === "sse" ? "sse" : "http",
       authType: editing.authType,
       bearerToken: "",
-      headers: "",
+      headers: maskedSecretLines(editing.headerKeys),
     });
   }, [open, editing]);
 
@@ -225,6 +226,14 @@ function ServerDialog({
     },
   );
 
+  /** Edit: only send a secret map the user touched (an emptied box clears it). Create: plain `KEY=value`. */
+  const secrets = (text: string, storedKeys: string[]) => {
+    if (!editing) return parseKv(text);
+    if (text === maskedSecretLines(storedKeys)) return undefined;
+    const parsed = parseSecretLines(text, storedKeys);
+    return Object.keys(parsed).length > 0 ? parsed : null;
+  };
+
   const save = useApiMutation(
     async () => {
       const base = {
@@ -239,7 +248,7 @@ function ServerDialog({
               ...base,
               command: form.command,
               args: form.args.split("\n").map((s) => s.trim()).filter(Boolean),
-              ...(form.env.trim() || !editing ? { env: parseKv(form.env) ?? (editing ? null : undefined) } : {}),
+              env: secrets(form.env, editing?.envKeys ?? []),
               cwd: form.cwd || null,
             }
           : {
@@ -247,7 +256,7 @@ function ServerDialog({
               url: form.url,
               authType: form.authType,
               ...(form.authType === "bearer" && form.bearerToken ? { bearerToken: form.bearerToken } : {}),
-              ...(form.authType === "headers" && form.headers.trim() ? { headers: parseKv(form.headers) } : {}),
+              ...(form.authType === "headers" ? { headers: secrets(form.headers, editing?.headerKeys ?? []) } : {}),
             };
       return api<ServerInfo | RequestedResponse>(editing ? `/api/servers/${editing.id}` : "/api/servers", {
         method: editing ? "PATCH" : "POST",
@@ -441,9 +450,9 @@ function ServerDialog({
             </Field>
             <Field
               label="Environment variables"
-              hint={editing?.hasEnv ? `KEY=value per line — stored: ${editing.envKeys.join(", ")} (leave blank to keep)` : "KEY=value per line · encrypted at rest"}
+              hint={secretLinesHint("KEY", !!editing?.hasEnv, "KEY=value per line · encrypted at rest")}
             >
-              <Textarea rows={2} value={form.env} onChange={(e) => set({ env: e.target.value })} placeholder="GITHUB_TOKEN=ghp_…" />
+              <Textarea rows={Math.max(2, form.env.split("\n").length)} value={form.env} onChange={(e) => set({ env: e.target.value })} placeholder="GITHUB_TOKEN=ghp_…" />
             </Field>
             {!editing && !canRunLocal && <NeedsAdminNote />}
           </>
@@ -476,9 +485,9 @@ function ServerDialog({
             {form.authType === "headers" && (
               <Field
                 label="Headers"
-                hint={editing?.hasHeaders ? `Header=value per line — stored: ${editing.headerKeys.join(", ")} (blank keeps)` : "Header=value per line · encrypted"}
+                hint={secretLinesHint("Header", !!editing?.hasHeaders, "Header=value per line · encrypted")}
               >
-                <Textarea rows={2} value={form.headers} onChange={(e) => set({ headers: e.target.value })} placeholder="X-Api-Key=…" />
+                <Textarea rows={Math.max(2, form.headers.split("\n").length)} value={form.headers} onChange={(e) => set({ headers: e.target.value })} placeholder="X-Api-Key=…" />
               </Field>
             )}
             {form.authType === "oauth" && (

@@ -16,8 +16,9 @@ import {
   type ServerRow,
   type UserRow,
 } from "../db/schema.js";
-import { encrypt, randomToken } from "../lib/crypto.js";
+import { decrypt, encrypt, randomToken } from "../lib/crypto.js";
 import type { ParsedServer } from "../lib/importParser.js";
+import { mergeSecrets } from "../lib/secretMap.js";
 import { USER_SETTING_DEFAULTS, USER_SETTING_KEYS, type UserSettingName } from "../lib/settings.js";
 import { isReservedSlug, isValidSlug, slugify } from "../lib/slug.js";
 import { getUser, getUserByUsername } from "./users.js";
@@ -77,12 +78,14 @@ export interface ServerPatch {
   enabled?: boolean;
   command?: string;
   args?: string[];
-  env?: Record<string, string> | null;
+  /** null clears; a null value keeps that key's stored value; keys left out are dropped. */
+  env?: Record<string, string | null> | null;
   cwd?: string | null;
   url?: string;
   authType?: "none" | "bearer" | "headers" | "oauth";
   bearerToken?: string | null;
-  headers?: Record<string, string> | null;
+  /** Same semantics as `env`. */
+  headers?: Record<string, string | null> | null;
 }
 
 export interface ScopedServers {
@@ -497,6 +500,13 @@ class Scope implements UserScope {
         if (bad) return bad;
       }
 
+      const env = patch.env ? mergeSecrets("Env var", decryptMap(row.envJsonEnc), patch.env) : { value: patch.env };
+      if ("error" in env) return { error: env.error, status: 400 };
+      const headers = patch.headers
+        ? mergeSecrets("Header", decryptMap(row.headersJsonEnc), patch.headers)
+        : { value: patch.headers };
+      if ("error" in headers) return { error: headers.error, status: 400 };
+
       const values: Partial<typeof servers.$inferInsert> = { updatedAt: Date.now() };
       if (patch.name !== undefined) values.name = patch.name;
       if (patch.slug !== undefined) values.slug = patch.slug;
@@ -508,9 +518,9 @@ class Scope implements UserScope {
       if (patch.cwd !== undefined) values.cwd = patch.cwd;
       if (patch.url !== undefined) values.url = patch.url;
       if (patch.authType !== undefined) values.authType = patch.authType;
-      if (patch.env !== undefined) values.envJsonEnc = encryptMap(patch.env);
+      if (patch.env !== undefined) values.envJsonEnc = encryptMap(env.value);
       if (patch.bearerToken !== undefined) values.bearerTokenEnc = patch.bearerToken ? encrypt(patch.bearerToken) : null;
-      if (patch.headers !== undefined) values.headersJsonEnc = encryptMap(patch.headers);
+      if (patch.headers !== undefined) values.headersJsonEnc = encryptMap(headers.value);
 
       const affectedAgentIds = this.agentsUsing(id);
       const updated = this.db.update(servers).set(values).where(eq(servers.id, id)).returning().get();
@@ -972,6 +982,10 @@ function toReceived({
 /** Empty maps are stored as "nothing", like an omitted one. */
 function encryptMap(map: Record<string, string> | null | undefined): string | null {
   return map && Object.keys(map).length > 0 ? encrypt(JSON.stringify(map)) : null;
+}
+
+function decryptMap(enc: string | null): Record<string, string> | undefined {
+  return enc ? (JSON.parse(decrypt(enc)) as Record<string, string>) : undefined;
 }
 
 /**

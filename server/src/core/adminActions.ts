@@ -3,6 +3,7 @@ import type { ServerRequestRow, ServerRow } from "../db/schema.js";
 import { decrypt } from "../lib/crypto.js";
 import { probeAuth, type ProbeResult } from "../lib/authProbe.js";
 import type { ParsedServer } from "../lib/importParser.js";
+import { mergeSecrets } from "../lib/secretMap.js";
 import type { ChangedKind } from "./upstreamConnection.js";
 import type { UpstreamManager } from "./upstreamManager.js";
 import type { NewServer, NewServerRequest, ScopeError, UserScope } from "./userScope.js";
@@ -206,22 +207,6 @@ export interface RequestEdits {
   authType?: ParsedServer["authType"];
   bearerToken?: string;
   headers?: Record<string, string | null>;
-}
-
-/** Resolve `null` values to the stored ones. Returns an error string when a key has nothing to keep. */
-function mergeSecrets(
-  label: string,
-  stored: Record<string, string> | undefined,
-  edited: Record<string, string | null> | undefined,
-): { value: Record<string, string> | undefined } | { error: string } {
-  if (!edited) return { value: stored };
-  const out: Record<string, string> = {};
-  for (const [key, value] of Object.entries(edited)) {
-    if (value !== null) out[key] = value;
-    else if (stored && key in stored) out[key] = stored[key];
-    else return { error: `${label} "${key}" has no value — the request didn't include one` };
-  }
-  return { value: out };
 }
 
 /** Apply the admin's edits to a stored request config. Pure; `insertServer` does the rest of the validation. */

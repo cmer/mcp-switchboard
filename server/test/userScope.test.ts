@@ -6,7 +6,7 @@ import { closeDb, initDb, type Db } from "../src/db/index.js";
 import { agentServers, requestLogs, type UserRow } from "../src/db/schema.js";
 import { createUser, defaultUserId, getUser } from "../src/core/users.js";
 import { userScope, type UserScope } from "../src/core/userScope.js";
-import { loadOrCreateKey } from "../src/lib/crypto.js";
+import { decrypt, loadOrCreateKey } from "../src/lib/crypto.js";
 
 let tmp: string;
 let db: Db;
@@ -80,6 +80,29 @@ describe("user scope: servers", () => {
     expect(alice.servers.update(b.server.id, { name: "pwned" })).toEqual({ error: "Not found", status: 404 });
     expect(alice.servers.remove(b.server.id)).toBeUndefined();
     expect(bob.servers.get(b.server.id)?.name).toBe("GitHub");
+  });
+
+  it("keeps a stored secret given as null, replaces the rest, drops what's left out, and clears on null", () => {
+    const created = alice.servers.create({
+      name: "Studio",
+      slug: "studio",
+      type: "stdio",
+      command: "npx",
+      env: { EMAIL: "me@x", LICENSE_KEY: "old", STALE: "gone" },
+    }) as { row: { id: number } };
+    const envOf = (row: { envJsonEnc: string | null }) => (row.envJsonEnc ? JSON.parse(decrypt(row.envJsonEnc)) : null);
+
+    const kept = alice.servers.update(created.row.id, { env: { EMAIL: null, LICENSE_KEY: "new", ADDED: "1" } });
+    expect("row" in kept && envOf(kept.row)).toEqual({ EMAIL: "me@x", LICENSE_KEY: "new", ADDED: "1" });
+
+    expect(alice.servers.update(created.row.id, { env: { NOPE: null } })).toEqual({
+      error: 'Env var "NOPE" has no stored value to keep',
+      status: 400,
+    });
+    expect(envOf(alice.servers.get(created.row.id)!)).toEqual({ EMAIL: "me@x", LICENSE_KEY: "new", ADDED: "1" });
+
+    const cleared = alice.servers.update(created.row.id, { env: null });
+    expect("row" in cleared && cleared.row.envJsonEnc).toBeNull();
   });
 
   it("reports the agents to notify before a delete removes their switches", () => {

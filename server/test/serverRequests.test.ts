@@ -336,7 +336,7 @@ describe("POST /api/requests/:id/approve", () => {
     const id = await fileStdioRequest();
     const { status, body } = await apiCall("POST", `/${id}/approve`, { env: { NOPE: null } });
     expect(status).toBe(400);
-    expect(body.error).toBe(`Env var "NOPE" has no value — the request didn't include one`);
+    expect(body.error).toBe(`Env var "NOPE" has no stored value to keep`);
     expect(db.select().from(serverRequests).where(eq(serverRequests.id, id)).get()?.status).toBe("pending");
   });
 

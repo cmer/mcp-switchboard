@@ -32,10 +32,10 @@ const createSchema = z.object({
 });
 
 const patchSchema = createSchema.partial().extend({
-  // null = clear the stored secret; undefined = leave unchanged
-  env: z.record(z.string(), z.string()).nullish(),
+  // null = clear the stored secret; undefined = leave unchanged; a null value = keep that key's stored value
+  env: z.record(z.string(), z.string().nullable()).nullish(),
   bearerToken: z.string().nullish(),
-  headers: z.record(z.string(), z.string()).nullish(),
+  headers: z.record(z.string(), z.string().nullable()).nullish(),
 });
 
 /** Exported so an approved request can return exactly the shape GET /api/servers/:id does. */

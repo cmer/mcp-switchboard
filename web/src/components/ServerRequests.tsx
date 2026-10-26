@@ -3,6 +3,7 @@ import { AlertTriangle, ChevronDown, ChevronUp, Pencil } from "lucide-react";
 import { toast } from "sonner";
 import { api } from "@/lib/api";
 import { useApiMutation, useServerRequests } from "@/lib/hooks";
+import { maskedSecretLines, parseSecretLines, secretLinesHint } from "@/lib/secretLines";
 import type { ServerRequest, ServerRequestConfig } from "@/lib/types";
 import { cn, timeAgo } from "@/lib/utils";
 import { Badge, Button, Field, Input, Select, Textarea } from "@/components/ui";
@@ -88,7 +89,7 @@ function StdioWarning({
 
 /**
  * The admin's working copy of a request's config. Secret values never reach the browser,
- * so stored env vars / headers start as `KEY=` lines: a blank value keeps what the agent sent.
+ * so stored env vars / headers start masked (see `secretLines`).
  */
 interface Draft {
   name: string;
@@ -109,27 +110,13 @@ function toDraft(s: ServerRequestConfig): Draft {
     slug: s.slug,
     command: s.command ?? "",
     args: s.args.join("\n"),
-    env: s.envKeys.map((k) => `${k}=`).join("\n"),
+    env: maskedSecretLines(s.envKeys),
     url: s.url ?? "",
     type: s.type,
     authType: s.authType,
     bearerToken: "",
-    headers: s.headerKeys.map((k) => `${k}=`).join("\n"),
+    headers: maskedSecretLines(s.headerKeys),
   };
-}
-
-/** `KEY=value` lines → map; a blank value on a key the agent sent becomes `null` (keep stored). */
-function parseSecretLines(text: string, storedKeys: string[]): Record<string, string | null> {
-  const out: Record<string, string | null> = {};
-  for (const line of text.split("\n")) {
-    const trimmed = line.trim();
-    const idx = trimmed.indexOf("=");
-    if (idx <= 0) continue;
-    const key = trimmed.slice(0, idx).trim();
-    const value = trimmed.slice(idx + 1).trim();
-    out[key] = value === "" && storedKeys.includes(key) ? null : value;
-  }
-  return out;
 }
 
 const draftArgs = (d: Draft) => d.args.split("\n").map((a) => a.trim()).filter(Boolean);
@@ -183,11 +170,7 @@ function DraftForm({
           </Field>
           <Field
             label="Environment variables"
-            hint={
-              server.envKeys.length > 0
-                ? "KEY=value per line · a blank value keeps what the agent sent"
-                : "KEY=value per line · encrypted at rest"
-            }
+            hint={secretLinesHint("KEY", server.envKeys.length > 0, "KEY=value per line · encrypted at rest")}
           >
             <Textarea
               rows={Math.max(2, draft.env.split("\n").length)}
@@ -229,11 +212,7 @@ function DraftForm({
           {draft.authType === "headers" && (
             <Field
               label="Headers"
-              hint={
-                server.headerKeys.length > 0
-                  ? "Header=value per line · a blank value keeps what the agent sent"
-                  : "Header=value per line · encrypted"
-              }
+              hint={secretLinesHint("Header", server.headerKeys.length > 0, "Header=value per line · encrypted")}
             >
               <Textarea
                 rows={Math.max(2, draft.headers.split("\n").length)}

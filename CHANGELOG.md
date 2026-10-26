@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Editing a server shows its stored env vars and headers as masked lines** (`EMAIL=••••••••`)
+  instead of an empty box, which made saved values look lost. A line left masked keeps its stored
+  value, typing over the mask replaces it, and deleting the line removes it, so adding one
+  variable no longer wipes the others. Editing a server request works the same way: a stored
+  value is now kept by leaving it masked, not by blanking it.
+
 ## [2.0.0] — 2026-10-25
 
 This is **2.0.0**: the switchboard becomes multi-user. Nothing about an existing install has to be redone, but the upgrade is one-way, so read "Upgrading from 1.x" first.
