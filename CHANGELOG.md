@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`${VAR}` in a local server's arguments is filled in from its environment variables** when the
+  server starts, so a tool that takes a license key or email on the command line
+  (`EMAIL=${EMAIL}`) can keep it in the encrypted env vars instead of in plain-text arguments.
+  It's the same syntax Claude Code's `.mcp.json` uses, so pasted configs work as-is.
+  `${VAR:-fallback}` covers an unset variable and `$${VAR}` stays literal. Only the server's own
+  env vars are used, never the switchboard's. A missing one stops the server with an error naming
+  it, rather than quietly passing an empty string.
+
 ### Changed
 
 - **Editing a server shows its stored env vars and headers as masked lines** (`EMAIL=••••••••`)

@@ -440,7 +440,7 @@ function ServerDialog({
             <Field label="Command">
               <Input value={form.command} onChange={(e) => set({ command: e.target.value })} placeholder="npx" />
             </Field>
-            <Field label="Arguments" hint="one per line">
+            <Field label="Arguments" hint="one per line · ${VAR} inserts an env var below">
               <Textarea
                 rows={3}
                 value={form.args}

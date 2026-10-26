@@ -21,6 +21,7 @@ import {
   type Tool,
 } from "@modelcontextprotocol/sdk/types.js";
 import type { Stream } from "node:stream";
+import { expandArgs } from "../lib/argTemplate.js";
 import { decrypt } from "../lib/crypto.js";
 import { RingBuffer } from "../lib/ringBuffer.js";
 import type { ServerRow } from "../db/schema.js";
@@ -193,11 +194,13 @@ export class UpstreamConnection {
   private buildTransport(type: ServerRow["type"] = this.row.type): Transport {
     const row = this.row;
     if (type === "stdio") {
-      const args: string[] = row.argsJson ? JSON.parse(row.argsJson) : [];
+      const rawArgs: string[] = row.argsJson ? JSON.parse(row.argsJson) : [];
       const userEnv: Record<string, string> = row.envJsonEnc ? JSON.parse(decrypt(row.envJsonEnc)) : {};
+      const expanded = expandArgs(rawArgs, userEnv);
+      if ("error" in expanded) throw new Error(expanded.error);
       const transport = new StdioClientTransport({
         command: row.command ?? "",
-        args,
+        args: expanded.args,
         env: { ...getDefaultEnvironment(), ...userEnv },
         cwd: row.cwd ?? undefined,
         stderr: "pipe",

@@ -161,7 +161,7 @@ function DraftForm({
           <Field label="Command">
             <Input value={draft.command} onChange={(e) => set({ command: e.target.value })} />
           </Field>
-          <Field label="Arguments" hint="one per line">
+          <Field label="Arguments" hint="one per line · ${VAR} inserts an env var below">
             <Textarea
               rows={Math.min(6, Math.max(2, draft.args.split("\n").length))}
               value={draft.args}
