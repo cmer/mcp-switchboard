@@ -48,6 +48,7 @@ export const META_TOOL_ADD_SERVER = "switchboard__add_server";
 export const META_TOOL_ASSIGN_SERVER = "switchboard__assign_server";
 export const META_TOOL_LIST_AGENTS = "switchboard__list_agents";
 export const META_TOOL_SERVER_STATUS = "switchboard__server_status";
+export const META_TOOL_RESTART_SERVER = "switchboard__restart_server";
 export const META_TOOL_REQUEST_SERVER = "switchboard__request_server";
 export const META_TOOL_REQUEST_STATUS = "switchboard__request_status";
 export const META_TOOL_SEARCH_TOOLS = "switchboard__search_tools";
@@ -103,6 +104,16 @@ const MANAGEMENT_TOOLS: Tool[] = [
     name: META_TOOL_SERVER_STATUS,
     description:
       "Diagnose one server: connection state, last error, tool/prompt/resource counts, and recent stderr for local servers. Use it after adding a server that isn't working.",
+    inputSchema: {
+      type: "object",
+      properties: { server_slug: { type: "string", description: "Server slug (the tool-name prefix)." } },
+      required: ["server_slug"],
+    },
+  },
+  {
+    name: META_TOOL_RESTART_SERVER,
+    description:
+      "Restart one of your own servers and wait for it to come back: a local server relaunches its command (picking up new code), a remote one reconnects and re-fetches its tools, prompts and resources. Returns the new state and which tools were added or removed. Every agent using the server drops its in-flight calls, and their tool lists update automatically. Servers shared with you can only be restarted by their owner.",
     inputSchema: {
       type: "object",
       properties: { server_slug: { type: "string", description: "Server slug (the tool-name prefix)." } },
@@ -446,6 +457,51 @@ function serverStatusTool(deps: AgentServerDeps, agent: AgentRow, args: Record<s
   });
 }
 
+/** Long enough for a local server to spawn and list its tools; past it the agent can poll server_status. */
+const RESTART_SETTLE_MS = 15_000;
+
+async function restartServerTool(deps: AgentServerDeps, agent: AgentRow, args: Record<string, unknown>) {
+  const slug = requireString(args, "server_slug");
+  const scope = userScope(deps.db, agent.userId);
+  const named = scope.matrix.switchable().find((s) => s.name === slug);
+  if (!named) throw new McpError(ErrorCode.InvalidParams, `Unknown server "${slug}" — call ${META_TOOL_LIST_SERVERS}`);
+  // A recipient can't restart a share: it would cut the owner's and every other recipient's calls.
+  if (named.sharedBy !== undefined) {
+    return errorContent(`"${slug}" is shared by ${named.sharedBy}; only its owner can restart it.`);
+  }
+  const row = scope.servers.get(named.serverId)!;
+  if (!row.enabled) return errorContent(`"${slug}" is disabled — enable it in the switchboard web UI first.`);
+
+  const before = new Set(deps.manager.get(row.id)?.toolsCache.map((t) => t.name) ?? []);
+  if (!(await deps.manager.restart(row.id))) {
+    return errorContent(`"${slug}" is not running on the switchboard, so there is nothing to restart.`);
+  }
+  const conn = deps.manager.get(row.id)!;
+  await conn.waitUntilSettled(RESTART_SETTLE_MS);
+
+  const after = new Set(conn.toolsCache.map((t) => t.name));
+  const connected = conn.state === "connected";
+  return jsonContent({
+    slug: row.slug,
+    state: conn.state,
+    lastError: conn.lastError,
+    toolCount: conn.toolsCache.length,
+    promptCount: conn.promptsCache.length,
+    resourceCount: conn.resourcesCache.length,
+    // Only a connected server's list is fresh; mid-backoff the caches are empty, not changed.
+    ...(connected
+      ? {
+          toolsAdded: [...after].filter((n) => !before.has(n)).map((n) => nsName(row.slug, n)),
+          toolsRemoved: [...before].filter((n) => !after.has(n)).map((n) => nsName(row.slug, n)),
+        }
+      : {}),
+    ...(!connected && row.type === "stdio" ? { stderr: conn.stderrLog.toArray().slice(-20) } : {}),
+    ...(conn.state === "connecting"
+      ? { note: `Still connecting after ${RESTART_SETTLE_MS / 1000}s — check ${META_TOOL_SERVER_STATUS} shortly.` }
+      : {}),
+  });
+}
+
 /**
  * Prefix a tool/prompt description with the server's note so the model can
  * disambiguate same-named tools from different accounts (kept terse on purpose).
@@ -495,7 +551,7 @@ function buildInstructions(deps: AgentServerDeps, agent: AgentRow): string {
   if (agentRole(deps, agent) === "manager") {
     lines.push(
       "",
-      `Management: this agent may reconfigure the switchboard. ${META_TOOL_ADD_SERVER} registers a remote MCP server from a pasted config, ${META_TOOL_ASSIGN_SERVER} grants or revokes a server for an agent, ${META_TOOL_LIST_AGENTS} shows the agent roster, and ${META_TOOL_SERVER_STATUS} diagnoses a server.`,
+      `Management: this agent may reconfigure the switchboard. ${META_TOOL_ADD_SERVER} registers a remote MCP server from a pasted config, ${META_TOOL_ASSIGN_SERVER} grants or revokes a server for an agent, ${META_TOOL_LIST_AGENTS} shows the agent roster, ${META_TOOL_SERVER_STATUS} diagnoses a server, and ${META_TOOL_RESTART_SERVER} restarts one (new upstream tools, or new code in a local server).`,
     );
   }
   lines.push("", "Servers:", roster);
@@ -795,6 +851,8 @@ export function buildAgentServer(agent: AgentRow, deps: AgentServerDeps): Server
           return assignServerTool(deps, agent, args);
         case META_TOOL_LIST_AGENTS:
           return listAgentsTool(deps, agent);
+        case META_TOOL_RESTART_SERVER:
+          return restartServerTool(deps, agent, args);
         default:
           return serverStatusTool(deps, agent, args);
       }

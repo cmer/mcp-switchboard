@@ -429,6 +429,14 @@ export class UpstreamConnection {
     }
   }
 
+  /** Wait until a connect attempt has an outcome (connected, needs_auth, backoff, …) or the timeout passes. */
+  async waitUntilSettled(timeoutMs: number): Promise<void> {
+    const start = Date.now();
+    while (this.state === "connecting" && Date.now() - start < timeoutMs) {
+      await new Promise((r) => setTimeout(r, 200));
+    }
+  }
+
   private async waitForConnected(timeoutMs: number): Promise<void> {
     const start = Date.now();
     while (Date.now() - start < timeoutMs) {

@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Manager agents can restart a server with `switchboard__restart_server`**, so an agent that
+  just changed a local server's code, or knows an upstream has published new tools, can pick up
+  the change without a trip to the web UI. A local server relaunches its command; a remote one
+  reconnects and re-fetches its lists. The tool waits for the server to come back (up to 15s) and
+  reports its state plus the tools that appeared or disappeared, or the error and recent stderr if
+  it didn't come back. Every agent's tool list updates automatically. Only the owner's own enabled
+  servers can be restarted: a share recipient can't, because a restart cuts in-flight calls for
+  the owner and everyone else the server is shared with.
+
 ## [2.1.0] — 2026-10-26
 
 ### Added

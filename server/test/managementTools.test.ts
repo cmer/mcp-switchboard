@@ -6,13 +6,14 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { and, eq } from "drizzle-orm";
 import { closeDb, initDb, type Db } from "../src/db/index.js";
-import { defaultUserId } from "../src/core/users.js";
-import { agentServers, agents, serverRequests, servers } from "../src/db/schema.js";
+import { createUser, defaultUserId } from "../src/core/users.js";
+import { agentServers, agents, serverRequests, servers, shares } from "../src/db/schema.js";
 import {
   buildAgentServer,
   META_TOOL_ADD_SERVER,
   META_TOOL_ASSIGN_SERVER,
   META_TOOL_LIST_AGENTS,
+  META_TOOL_RESTART_SERVER,
   META_TOOL_SERVER_STATUS,
   type AgentServerDeps,
 } from "../src/core/agentServerFactory.js";
@@ -99,6 +100,7 @@ describe("standard agents", () => {
     expect(names).not.toContain(META_TOOL_ASSIGN_SERVER);
     expect(names).not.toContain(META_TOOL_LIST_AGENTS);
     expect(names).not.toContain(META_TOOL_SERVER_STATUS);
+    expect(names).not.toContain(META_TOOL_RESTART_SERVER);
   });
 
   it("are refused when they call one by name", async () => {
@@ -109,6 +111,9 @@ describe("standard agents", () => {
     await expect(client.callTool({ name: META_TOOL_LIST_AGENTS, arguments: {} })).rejects.toThrow(
       /requires the manager role/,
     );
+    await expect(
+      client.callTool({ name: META_TOOL_RESTART_SERVER, arguments: { server_slug: "github" } }),
+    ).rejects.toThrow(/requires the manager role/);
   });
 });
 
@@ -117,7 +122,13 @@ describe("manager agents", () => {
     const client = await connect("boss");
     const names = (await client.listTools()).tools.map((t) => t.name);
     expect(names).toEqual(
-      expect.arrayContaining([META_TOOL_ADD_SERVER, META_TOOL_ASSIGN_SERVER, META_TOOL_LIST_AGENTS, META_TOOL_SERVER_STATUS]),
+      expect.arrayContaining([
+        META_TOOL_ADD_SERVER,
+        META_TOOL_ASSIGN_SERVER,
+        META_TOOL_LIST_AGENTS,
+        META_TOOL_SERVER_STATUS,
+        META_TOOL_RESTART_SERVER,
+      ]),
     );
   });
 
@@ -292,6 +303,93 @@ describe(META_TOOL_SERVER_STATUS, () => {
     const client = await connect("boss");
     await expect(
       client.callTool({ name: META_TOOL_SERVER_STATUS, arguments: { server_slug: "nope" } }),
+    ).rejects.toThrow(/Unknown server "nope"/);
+  });
+});
+
+describe(META_TOOL_RESTART_SERVER, () => {
+  const githubId = () => db.select().from(servers).where(eq(servers.slug, "github")).get()!.id;
+
+  /** One live connection whose restart swaps its tool list for `next` and lands in `state`. */
+  function fakeManager(next: string[], state = "connected") {
+    const conn = {
+      state: "connected",
+      lastError: null as string | null,
+      toolsCache: [{ name: "search" }, { name: "old_tool" }],
+      promptsCache: [],
+      resourcesCache: [],
+      stderrLog: { toArray: () => ["boom"] },
+      waitUntilSettled: vi.fn(async () => {}),
+    };
+    const restart = vi.fn(async (id: number) => {
+      if (id !== githubId()) return false;
+      conn.state = state;
+      conn.toolsCache = next.map((name) => ({ name }));
+      return true;
+    });
+    deps.manager = { get: (id: number) => (id === githubId() ? conn : undefined), restart } as unknown as UpstreamManager;
+    return { conn, restart };
+  }
+
+  it("restarts an owned server and reports which tools appeared and disappeared", async () => {
+    const { conn, restart } = fakeManager(["search", "new_tool"]);
+    const client = await connect("boss");
+    const res = await callJson(client, META_TOOL_RESTART_SERVER, { server_slug: "github" });
+    expect(restart).toHaveBeenCalledWith(githubId());
+    expect(conn.waitUntilSettled).toHaveBeenCalled();
+    expect(res).toMatchObject({
+      slug: "github",
+      state: "connected",
+      toolCount: 2,
+      toolsAdded: ["github__new_tool"],
+      toolsRemoved: ["github__old_tool"],
+    });
+  });
+
+  it("reports the error instead of a tool diff when the server doesn't come back", async () => {
+    const { conn } = fakeManager([], "backoff");
+    conn.lastError = "spawn ENOENT";
+    const client = await connect("boss");
+    const res = await callJson(client, META_TOOL_RESTART_SERVER, { server_slug: "github" });
+    expect(res).toMatchObject({ state: "backoff", lastError: "spawn ENOENT" });
+    expect(res.toolsAdded).toBeUndefined();
+    expect(res.stderr).toBeUndefined(); // remote server: no stderr to show
+  });
+
+  it("refuses a disabled server", async () => {
+    const { restart } = fakeManager([]);
+    db.update(servers).set({ enabled: false }).where(eq(servers.slug, "github")).run();
+    const client = await connect("boss");
+    const res = (await client.callTool({ name: META_TOOL_RESTART_SERVER, arguments: { server_slug: "github" } })) as any;
+    expect(res.isError).toBe(true);
+    expect(res.content[0].text).toMatch(/disabled/);
+    expect(restart).not.toHaveBeenCalled();
+  });
+
+  it("refuses a server shared with the caller's owner", async () => {
+    const { restart } = fakeManager([]);
+    const bob = createUser(db, { username: "bob" });
+    db.insert(shares)
+      .values({ serverId: githubId(), recipientUserId: bob.id, alias: "carl-github", status: "accepted", createdAt: Date.now() })
+      .run();
+    db.insert(agents)
+      .values({ userId: bob.id, slug: "bob-boss", name: "Bob", role: "manager", tokenEnc: encrypt("bob-token"), createdAt: Date.now() })
+      .run();
+    const client = await connect("bob-boss");
+    const res = (await client.callTool({
+      name: META_TOOL_RESTART_SERVER,
+      arguments: { server_slug: "carl-github" },
+    })) as any;
+    expect(res.isError).toBe(true);
+    expect(res.content[0].text).toMatch(/only its owner can restart it/);
+    expect(restart).not.toHaveBeenCalled();
+  });
+
+  it("rejects unknown servers", async () => {
+    fakeManager([]);
+    const client = await connect("boss");
+    await expect(
+      client.callTool({ name: META_TOOL_RESTART_SERVER, arguments: { server_slug: "nope" } }),
     ).rejects.toThrow(/Unknown server "nope"/);
   });
 });
