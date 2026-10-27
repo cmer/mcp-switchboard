@@ -59,3 +59,5 @@ internal test churn). On release, rename `[Unreleased]` to the new version with 
 ## Verification
 
 MCP endpoint smoke test (after `npm run dev`): POST `initialize` to `http://localhost:8787/mcp/<username>/<agent>` with `Authorization: Bearer <token>` and `Accept: application/json, text/event-stream`, capture `mcp-session-id` response header, then `tools/list`. Interactive: `npx @modelcontextprotocol/inspector`.
+
+End any turn that reports on long-running or delegated work with a short status: **Goal**, **Done**, **Next**, **Needs you** (or "nothing").
