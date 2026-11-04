@@ -118,7 +118,9 @@ export function Switch({
         disabled={disabled}
         aria-label={label}
         onChange={(e) => onChange(e.target.checked)}
-        className="peer absolute inset-0 z-10 m-0 cursor-pointer opacity-0 disabled:cursor-not-allowed"
+        // A checkbox is a replaced element: `inset-0` alone leaves it at its intrinsic ~12px in the
+        // corner, so only that sliver was clickable. Size it explicitly to cover the whole track.
+        className="peer absolute inset-0 z-10 m-0 size-full cursor-pointer appearance-none opacity-0 disabled:cursor-not-allowed"
       />
       <i
         className={cn(

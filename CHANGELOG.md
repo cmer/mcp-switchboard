@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Toggle switches respond to a click anywhere on the switch**, not just its top-left corner.
+  The invisible checkbox behind each switch stayed at its native ~12px size instead of covering
+  the track, so clicking the knob or the middle of the switch did nothing. This affected every
+  switch in the UI, including the per-agent server matrix and the Manager role.
+
 ## [2.2.0] — 2026-10-26
 
 ### Added
