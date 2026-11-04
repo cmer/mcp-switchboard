@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.2.1] — 2026-11-04
+
 ### Fixed
 
 - **Toggle switches respond to a click anywhere on the switch**, not just its top-left corner.
@@ -421,7 +423,8 @@ Initial release.
 - **Built-in `switchboard__list_servers` meta-tool.**
 - Docker image and GitHub Actions CI (build + test, plus a Docker build and smoke test).
 
-[Unreleased]: https://github.com/cmer/mcp-switchboard/compare/v2.2.0...HEAD
+[Unreleased]: https://github.com/cmer/mcp-switchboard/compare/v2.2.1...HEAD
+[2.2.1]: https://github.com/cmer/mcp-switchboard/compare/v2.2.0...v2.2.1
 [2.2.0]: https://github.com/cmer/mcp-switchboard/compare/v2.1.0...v2.2.0
 [2.1.0]: https://github.com/cmer/mcp-switchboard/compare/v2.0.0...v2.1.0
 [2.0.0]: https://github.com/cmer/mcp-switchboard/compare/v1.6.0...v2.0.0
