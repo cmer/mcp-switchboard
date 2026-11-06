@@ -80,9 +80,10 @@ often each person uses it, and revoke it at any time.
 ![Share — jane's Servers page with Context7 received from carl under her own alias](docs/share.png)
 
 Adding a **local command** (stdio) server runs code on the host, so it needs the Admin's per-user "can
-run local commands" permission. Without it, a request goes to the Admin to approve. Treat the permission
-as full trust: a local command can read `secret.key`, so a user who has it can read every secret on the
-host. This is a household model, not protection from a hostile user.
+run local commands" permission. Without it, a request goes to the Admin to approve. Every local server
+runs in an OS [sandbox](docs/sandbox.md) (bubblewrap on Linux and in Docker, Seatbelt on macOS). It sees
+the system read-only and its own folder, never `secret.key`, the database or other servers. The network
+isn't restricted, so this is a household model, not protection from a hostile user.
 
 ![Settings — your own preferences, plus instance name and sign-in options for the Admin](docs/settings.png)
 
@@ -96,4 +97,5 @@ To sign in through Cloudflare Access instead of passwords, see [that guide](docs
 - [Cloudflare Access](docs/cloudflare-access.md): sign in with Cloudflare instead of passwords
 - [Recovering access](docs/recovering-access.md): reset a password or switch back to password login from the host
 - [Lean mode](docs/lean-mode.md): a constant-size tool surface for agents with large catalogs
+- [Local server sandbox](docs/sandbox.md): what local servers can reach, host paths, platform notes
 - [Changelog](CHANGELOG.md), including how to upgrade from 1.x

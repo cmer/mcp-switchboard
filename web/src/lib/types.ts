@@ -10,6 +10,10 @@ export interface ServerInfo {
   command: string | null;
   args: string[];
   cwd: string | null;
+  /** Admin-set: this local server runs outside the sandbox. */
+  unsandboxed: boolean;
+  /** Admin-set: host directories mounted into this local server's sandbox. */
+  hostPaths: HostPath[];
   url: string | null;
   authType: "none" | "bearer" | "headers" | "oauth";
   hasEnv: boolean;
@@ -28,6 +32,21 @@ export interface ServerInfo {
   createdByAgentSlug: string | null;
   /** Other users this server is shared with: names and usage only. */
   sharedWith: OwnedShare[];
+}
+
+export interface HostPath {
+  path: string;
+  writable: boolean;
+}
+
+/** How local servers run on this switchboard. */
+export interface SandboxInfo {
+  /** The Admin's switch in Settings. */
+  enabled: boolean;
+  kind: "bwrap" | "seatbelt" | null;
+  available: boolean;
+  /** Why it isn't available. */
+  error: string | null;
 }
 
 /** One recipient of one of my servers, as the owner sees it. */
@@ -167,6 +186,8 @@ export interface AuthMe {
   capturePayloads: boolean;
   /** Set when the MCP endpoint runs on its own port/host; null = same origin as the UI. */
   mcpBaseUrl: string | null;
+  /** Signed in only. */
+  sandbox?: SandboxInfo;
 }
 
 export type LogStatus = "pending" | "ok" | "error";

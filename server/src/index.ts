@@ -4,6 +4,8 @@ import { serve } from "@hono/node-server";
 import { config, ensureDataDir } from "./config.js";
 import { initDb } from "./db/index.js";
 import { loadOrCreateKey } from "./lib/crypto.js";
+import { SANDBOX_LABELS, StdioSandbox } from "./lib/sandbox.js";
+import { readSandboxEnabled } from "./lib/settings.js";
 import type { AgentServerDeps } from "./core/agentServerFactory.js";
 import { RequestLogger } from "./core/requestLogger.js";
 import { SwitchboardHub } from "./core/switchboardHub.js";
@@ -35,7 +37,9 @@ async function main(): Promise<void> {
       onTokensSaved: (id) => refresher?.schedule(id),
     });
 
-  const manager = new UpstreamManager(db, makeOAuthProvider);
+  const sandbox = new StdioSandbox({ rootDir: config.sandboxDir, dataDir: config.dataDir });
+  const sandboxStatus = await sandbox.probe();
+  const manager = new UpstreamManager(db, makeOAuthProvider, sandbox);
   const logger = new RequestLogger(db);
   // The hub builds agent servers, so the fan-out callbacks the management
   // meta-tools need are patched in after it exists rather than injected.
@@ -89,6 +93,9 @@ async function main(): Promise<void> {
       console.log(`MCP Switchboard listening on http://localhost:${info.port}${splitPorts ? " (UI + API)" : ""}`);
       console.log(`  data dir:   ${config.dataDir}`);
       console.log(`  public url: ${config.publicUrl}`);
+      if (!readSandboxEnabled(db)) console.log("  sandbox:    off (Settings) — local servers run unsandboxed");
+      else if (sandboxStatus.available) console.log(`  sandbox:    ${SANDBOX_LABELS[sandboxStatus.kind!]} (${config.sandboxDir})`);
+      else console.warn(`  sandbox:    UNAVAILABLE — local servers won't start: ${sandboxStatus.error}`);
     },
   );
 

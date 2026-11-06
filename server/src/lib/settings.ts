@@ -47,6 +47,13 @@ export const USER_SETTING_DEFAULTS: Record<UserSettingName, boolean> = {
   capturePayloads: true,
 };
 
+/** Instance setting: run stdio servers in the OS sandbox (on unless the Admin turns it off). */
+export const SANDBOX_SETTING = "sandboxStdio";
+
+export function readSandboxEnabled(db: Db): boolean {
+  return readBoolSetting(db, SANDBOX_SETTING, true);
+}
+
 /** How a human signs in to the UI: with a password, or through Cloudflare Access. */
 export const LOGIN_MODE_SETTING = "loginMode";
 export const LOGIN_MODES = ["password", "cloudflare"] as const;

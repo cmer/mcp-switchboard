@@ -50,6 +50,9 @@ nothing until the user approves the plan.
    - Docker: `docker compose version`. If present, it must be Compose v2.24 or newer, because the
      override uses `!reset`.
    - Ports `8787` and `8788` free: `ss -ltn`.
+   - User namespaces, which the stdio sandbox needs: `sysctl -n kernel.apparmor_restrict_unprivileged_userns`.
+     `1` (Ubuntu 23.10 and later) blocks them even inside the container, so the plan must include the
+     sysctl in Step 4. Missing or `0` (Debian): nothing to do.
    - The LAN address: `hostname -I`, first address.
    - No existing install (see Ground rules).
 3. Find the latest release: `git ls-remote --tags --refs https://github.com/cmer/mcp-switchboard`,
@@ -95,6 +98,10 @@ All commands run on the target, as root or through `sudo`.
    - Docker Engine with the Compose plugin, from Docker's apt repository, following
      https://docs.docker.com/engine/install/ for the detected distribution. Then
      `systemctl enable --now docker`.
+   - If preflight found `kernel.apparmor_restrict_unprivileged_userns = 1`: write
+     `/etc/sysctl.d/60-mcp-switchboard-userns.conf` containing
+     `kernel.apparmor_restrict_unprivileged_userns = 0`, then `sysctl --system`. Without it, local
+     servers don't start (see `docs/sandbox.md`).
 2. **Checkout:**
    `git clone --branch <tag> --depth 1 https://github.com/cmer/mcp-switchboard /opt/mcp-switchboard`
    For `main`, drop `--branch <tag>`.

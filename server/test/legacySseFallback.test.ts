@@ -76,6 +76,9 @@ describe("legacy SSE fallback", () => {
       makeOAuthProvider: () => {
         throw new Error("no oauth");
       },
+      wrapStdio: () => {
+        throw new Error("no stdio");
+      },
       onLegacySseFallback: (id) => {
         fallbacks.push(id);
         return { ...sseRow(up.url), type: "http", updatedAt: 1 };
@@ -100,6 +103,9 @@ describe("legacy SSE fallback", () => {
       onStateChanged: () => {},
       makeOAuthProvider: () => {
         throw new Error("no oauth");
+      },
+      wrapStdio: () => {
+        throw new Error("no stdio");
       },
       onLegacySseFallback: () => {
         fellBack = true;

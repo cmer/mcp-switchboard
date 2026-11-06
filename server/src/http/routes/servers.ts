@@ -4,7 +4,9 @@ import { eq } from "drizzle-orm";
 import type { Context } from "hono";
 import { auth } from "@modelcontextprotocol/sdk/client/auth.js";
 import { oauthCredentials, type ServerRow } from "../../db/schema.js";
+import { config } from "../../config.js";
 import { decrypt } from "../../lib/crypto.js";
+import { checkHostPath, parseHostPaths } from "../../lib/sandbox.js";
 import { parseImport, type ParsedServer } from "../../lib/importParser.js";
 import { slugify } from "../../lib/slug.js";
 import { addServers, detectAuth, fileServerRequest, insertServer } from "../../core/adminActions.js";
@@ -24,6 +26,8 @@ const createSchema = z.object({
   args: z.array(z.string()).optional(),
   env: z.record(z.string(), z.string()).optional(),
   cwd: z.string().nullish(),
+  unsandboxed: z.boolean().optional(),
+  hostPaths: z.array(z.object({ path: z.string().min(1).max(1000), writable: z.boolean() })).max(20).optional(),
   // remote
   url: z.string().url().optional(),
   authType: z.enum(["none", "bearer", "headers", "oauth"]).optional().default("none"),
@@ -36,7 +40,25 @@ const patchSchema = createSchema.partial().extend({
   env: z.record(z.string(), z.string().nullable()).nullish(),
   bearerToken: z.string().nullish(),
   headers: z.record(z.string(), z.string().nullable()).nullish(),
+  hostPaths: createSchema.shape.hostPaths.nullable(),
 });
+
+/**
+ * A server's sandbox overrides decide what of the host a local command can reach, so they're the
+ * Admin's alone, and a host path may never overlap the switchboard's own data.
+ */
+function checkSandboxFields(
+  scope: UserScope,
+  input: { unsandboxed?: boolean; hostPaths?: { path: string }[] | null },
+): { error: string; status: 400 | 403 } | null {
+  if (input.unsandboxed === undefined && input.hostPaths === undefined) return null;
+  if (scope.user.role !== "admin") return { error: "Only the Admin can change how a server is sandboxed", status: 403 };
+  for (const h of input.hostPaths ?? []) {
+    const bad = checkHostPath(h.path, [config.dataDir, config.sandboxDir]);
+    if (bad) return { error: bad, status: 400 };
+  }
+  return null;
+}
 
 /** Exported so an approved request can return exactly the shape GET /api/servers/:id does. */
 export function serializeServer(ctx: AppContext, row: ServerRow, sharedWith: OwnedShare[] = []) {
@@ -55,6 +77,8 @@ export function serializeServer(ctx: AppContext, row: ServerRow, sharedWith: Own
     command: row.command,
     args: row.argsJson ? (JSON.parse(row.argsJson) as string[]) : [],
     cwd: row.cwd,
+    unsandboxed: row.unsandboxed,
+    hostPaths: parseHostPaths(row.hostPathsJson),
     url: row.url,
     authType: row.authType,
     hasEnv: !!row.envJsonEnc,
@@ -112,6 +136,8 @@ export function serverRoutes(ctx: AppContext): Hono {
     if (!parsed.success) return c.json({ error: parsed.error.issues[0]?.message ?? "Invalid input" }, 400);
     const scope = scopeOf(ctx, c);
     const input = parsed.data;
+    const sandboxProblem = checkSandboxFields(scope, input);
+    if (sandboxProblem) return c.json({ error: sandboxProblem.error }, sandboxProblem.status);
 
     if (input.type === "stdio" && !scope.canRunLocalCommands) {
       // Checked now, so the Admin isn't handed a request that can't be approved as filed.
@@ -217,6 +243,8 @@ export function serverRoutes(ctx: AppContext): Hono {
     const parsed = patchSchema.safeParse(await c.req.json().catch(() => null));
     if (!parsed.success) return c.json({ error: parsed.error.issues[0]?.message ?? "Invalid input" }, 400);
     const input = parsed.data;
+    const sandboxProblem = checkSandboxFields(scope, input);
+    if (sandboxProblem) return c.json({ error: sandboxProblem.error }, sandboxProblem.status);
 
     // Approved local servers stay usable (rename, describe, switch off), but what runs is the Admin's call.
     const staysLocal = (input.type ?? row.type) === "stdio";

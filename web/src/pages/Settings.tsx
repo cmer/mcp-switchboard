@@ -2,7 +2,7 @@ import { useState } from "react";
 import { toast } from "sonner";
 import { api } from "@/lib/api";
 import { useApiMutation, useAuthMe, useLogConfig } from "@/lib/hooks";
-import type { LoginMode, LogConfig } from "@/lib/types";
+import type { LoginMode, LogConfig, SandboxInfo } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { PageBar } from "@/components/Layout";
 import { Button, Field, Input, Switch, Tabs, Textarea } from "@/components/ui";
@@ -103,6 +103,38 @@ function PayloadCaptureToggle() {
             ? "Full JSON-RPC frames from your agents are stored, so tool arguments and results — including any secrets an agent passes through — sit in the database unredacted."
             : "Only metadata is stored: who called what, when, how long it took, and how big the frames were."}
         </div>
+      </div>
+    </div>
+  );
+}
+
+const SANDBOX_NAMES = { bwrap: "bubblewrap", seatbelt: "macOS Seatbelt" } as const;
+
+/** Whether local servers run in the OS sandbox. Everyone's local servers, so the Admin's call. */
+function SandboxForm({ sandbox }: { sandbox: SandboxInfo }) {
+  const save = useApiMutation(
+    (on: boolean) => api("/api/auth/settings", { method: "POST", json: { sandbox: on } }),
+    ["auth", "servers"],
+    () => toast.success("Saved — local servers are restarting"),
+  );
+  const name = sandbox.kind ? SANDBOX_NAMES[sandbox.kind] : null;
+  let detail: string;
+  if (!sandbox.enabled) {
+    detail =
+      "Off: local servers run as the switchboard itself and can read its encryption key, its database (every user's credentials) and anything else it can.";
+  } else if (!sandbox.available) {
+    detail = `On, but unavailable here, so local servers won't start: ${sandbox.error ?? "unknown reason"}. See docs/sandbox.md.`;
+  } else if (sandbox.kind === "seatbelt") {
+    detail = `Each local server runs in ${name}: it can't read the switchboard's data or your home directory, and writes only to its own folder. macOS can't hide other processes, so a server can still see the command line and environment of processes running as you.`;
+  } else {
+    detail = `Each local server runs in ${name}: it sees the system read-only and its own folder, and nothing of the switchboard's data or other servers. The network is not restricted.`;
+  }
+  return (
+    <div className="flex items-center gap-3">
+      <Switch checked={sandbox.enabled} disabled={save.isPending} onChange={(on) => save.mutate(on)} label="Run local servers in a sandbox" />
+      <div>
+        <div className="text-[13px] font-medium">Run local servers in a sandbox</div>
+        <div className={cn("text-xs", sandbox.enabled && sandbox.available ? "text-faint" : "text-warn")}>{detail}</div>
       </div>
     </div>
   );
@@ -342,6 +374,13 @@ export function SettingsPage() {
             <h2 className="mb-3 text-[15px] font-semibold tracking-tight">Logs</h2>
             <RetentionForm />
           </div>
+
+          {auth?.sandbox && (
+            <div className={cn(CARD, "mt-4")}>
+              <h2 className="mb-3 text-[15px] font-semibold tracking-tight">Local servers</h2>
+              <SandboxForm sandbox={auth.sandbox} />
+            </div>
+          )}
 
           <div className={cn(CARD, "mt-4")}>
             <h2 className="mb-3 text-[15px] font-semibold tracking-tight">Sign-in</h2>

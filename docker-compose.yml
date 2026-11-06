@@ -20,3 +20,12 @@ services:
     volumes:
       # SQLite db + encryption key — back this up
       - ./data:/app/data
+    # Local (stdio) servers run in a bubblewrap sandbox inside the container, which needs a user
+    # namespace that Docker's defaults refuse. The seccomp profile is Docker's default plus only
+    # the syscalls bubblewrap uses; systempaths lets it mount a fresh /proc for each server; and
+    # AppArmor's default profile blocks the mounts. Remove all three only if you turn the sandbox
+    # off in Settings. See docs/sandbox.md.
+    security_opt:
+      - seccomp=./docker/seccomp.json
+      - systempaths=unconfined
+      - apparmor=unconfined
