@@ -40,6 +40,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Docker: `uvx` servers work.** `uv` was installed into root's home, which wasn't on the
   `PATH`, so `uvx` commands failed. It now lives in `/usr/local/bin`.
 
+## [2.2.1] — 2026-11-04
+
+### Fixed
+
+- **Toggle switches respond to a click anywhere on the switch**, not just its top-left corner.
+  The invisible checkbox behind each switch stayed at its native ~12px size instead of covering
+  the track, so clicking the knob or the middle of the switch did nothing. This affected every
+  switch in the UI, including the per-agent server matrix and the Manager role.
+
 ## [2.2.0] — 2026-10-26
 
 ### Added
@@ -447,7 +456,8 @@ Initial release.
 - **Built-in `switchboard__list_servers` meta-tool.**
 - Docker image and GitHub Actions CI (build + test, plus a Docker build and smoke test).
 
-[Unreleased]: https://github.com/cmer/mcp-switchboard/compare/v2.2.0...HEAD
+[Unreleased]: https://github.com/cmer/mcp-switchboard/compare/v2.2.1...HEAD
+[2.2.1]: https://github.com/cmer/mcp-switchboard/compare/v2.2.0...v2.2.1
 [2.2.0]: https://github.com/cmer/mcp-switchboard/compare/v2.1.0...v2.2.0
 [2.1.0]: https://github.com/cmer/mcp-switchboard/compare/v2.0.0...v2.1.0
 [2.0.0]: https://github.com/cmer/mcp-switchboard/compare/v1.6.0...v2.0.0
