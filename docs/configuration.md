@@ -25,6 +25,7 @@ The switchboard talks OAuth in two directions, and each direction has its own UR
 | `HOST` | all interfaces | Interface the UI/API listener binds to. |
 | `PUBLIC_URL` | `http://localhost:8787` | The URL **you open the UI at in your browser**. Upstream OAuth redirect URIs are built from it (`<PUBLIC_URL>/oauth/callback`). Agents don't use it, with one exception: when it is `https://`, a request for that same host is treated as TLS even if a proxy hop says otherwise. |
 | `DATA_DIR` | see below | Where the SQLite database and encryption key live. The Docker image sets it to `/app/data`. |
+| `SANDBOX_DIR` | `~/.cache/mcp-switchboard/sandboxes` | Parent of each local server's own sandbox folder (its `HOME` and caches). The Docker image sets it to `/app/sandboxes`. See [Local server sandbox](sandbox.md). |
 
 ## The agent endpoint (`/mcp/<username>/<agent>`)
 

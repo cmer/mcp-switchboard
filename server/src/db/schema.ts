@@ -64,6 +64,10 @@ export const servers = sqliteTable(
     argsJson: text("args_json"),
     envJsonEnc: text("env_json_enc"),
     cwd: text("cwd"),
+    /** Admin-only escape hatch: run this stdio server outside the sandbox. */
+    unsandboxed: integer("unsandboxed", { mode: "boolean" }).notNull().default(false),
+    /** Admin-only: JSON `[{ path, writable }]` of host directories mounted into the sandbox. */
+    hostPathsJson: text("host_paths_json"),
     // remote
     url: text("url"),
     authType: text("auth_type").$type<"none" | "bearer" | "headers" | "oauth">().notNull().default("none"),

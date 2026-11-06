@@ -29,6 +29,8 @@ CREATE TABLE IF NOT EXISTS ${name} (
   args_json TEXT,
   env_json_enc TEXT,
   cwd TEXT,
+  unsandboxed INTEGER NOT NULL DEFAULT 0,
+  host_paths_json TEXT,
   url TEXT,
   auth_type TEXT NOT NULL DEFAULT 'none',
   bearer_token_enc TEXT,
@@ -277,6 +279,12 @@ function migrate(sq: Database.Database): void {
   }
   if (!serverCols.some((c) => c.name === "created_by_agent_slug")) {
     sq.exec("ALTER TABLE servers ADD COLUMN created_by_agent_slug TEXT");
+  }
+  if (!serverCols.some((c) => c.name === "unsandboxed")) {
+    sq.exec("ALTER TABLE servers ADD COLUMN unsandboxed INTEGER NOT NULL DEFAULT 0");
+  }
+  if (!serverCols.some((c) => c.name === "host_paths_json")) {
+    sq.exec("ALTER TABLE servers ADD COLUMN host_paths_json TEXT");
   }
   const agentCols = sq.prepare("PRAGMA table_info(agents)").all() as { name: string }[];
   if (!agentCols.some((c) => c.name === "role")) {

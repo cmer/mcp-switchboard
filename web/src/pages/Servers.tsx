@@ -6,7 +6,7 @@ import { api } from "@/lib/api";
 import { useApiMutation, useAuthMe, useDirectory, useServerLogs, useServers, useServerTools, useShares } from "@/lib/hooks";
 import { maskedSecretLines, parseSecretLines, secretLinesHint } from "@/lib/secretLines";
 import { SERVER_TEMPLATES, templatePayload, templateReady, type ServerTemplate } from "@/lib/templates";
-import type { OwnedShare, ReceivedShare, ServerInfo, ShareOffer } from "@/lib/types";
+import type { HostPath, OwnedShare, ReceivedShare, ServerInfo, ShareOffer } from "@/lib/types";
 import { cn, timeAgo } from "@/lib/utils";
 import { PageBar } from "@/components/Layout";
 import { ServerRequestsPanel } from "@/components/ServerRequests";
@@ -63,6 +63,9 @@ interface FormState {
   args: string;
   env: string;
   cwd: string;
+  /** Admin only: `path` or `path:rw`, one per line. */
+  hostPaths: string;
+  unsandboxed: boolean;
   url: string;
   remoteType: "http" | "sse";
   authType: "none" | "bearer" | "headers" | "oauth";
@@ -79,12 +82,28 @@ const EMPTY: FormState = {
   args: "",
   env: "",
   cwd: "",
+  hostPaths: "",
+  unsandboxed: false,
   url: "",
   remoteType: "http",
   authType: "oauth",
   bearerToken: "",
   headers: "",
 };
+
+/** `path` is read-only, `path:rw` writable; blank lines are dropped. */
+function parseHostPathLines(text: string): HostPath[] {
+  return text
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => {
+      const m = line.match(/^(.*?):(rw|ro)$/);
+      return m ? { path: m[1].trim(), writable: m[2] === "rw" } : { path: line, writable: false };
+    });
+}
+
+const hostPathLines = (paths: HostPath[]) => paths.map((h) => (h.writable ? `${h.path}:rw` : h.path)).join("\n");
 
 function parseKv(text: string): Record<string, string> | undefined {
   const out: Record<string, string> = {};
@@ -111,6 +130,7 @@ function ServerDialog({
 }) {
   const { data: auth } = useAuthMe();
   const canRunLocal = auth?.user?.canRunLocalCommands ?? true;
+  const isAdmin = auth?.user?.role === "admin";
   const [view, setView] = useState<"picker" | "template" | "manual">("picker");
   const [template, setTemplate] = useState<ServerTemplate | null>(null);
   const [tSlug, setTSlug] = useState("");
@@ -154,6 +174,8 @@ function ServerDialog({
       args: editing.args.join("\n"),
       env: maskedSecretLines(editing.envKeys),
       cwd: editing.cwd ?? "",
+      hostPaths: hostPathLines(editing.hostPaths),
+      unsandboxed: editing.unsandboxed,
       url: editing.url ?? "",
       remoteType: editing.type === "sse" ? "sse" : "http",
       authType: editing.authType,
@@ -250,6 +272,8 @@ function ServerDialog({
               args: form.args.split("\n").map((s) => s.trim()).filter(Boolean),
               env: secrets(form.env, editing?.envKeys ?? []),
               cwd: form.cwd || null,
+              // Only the Admin decides what of the host a local command can reach.
+              ...(isAdmin ? { unsandboxed: form.unsandboxed, hostPaths: parseHostPathLines(form.hostPaths) } : {}),
             }
           : {
               ...base,
@@ -454,6 +478,29 @@ function ServerDialog({
             >
               <Textarea rows={Math.max(2, form.env.split("\n").length)} value={form.env} onChange={(e) => set({ env: e.target.value })} placeholder="GITHUB_TOKEN=ghp_…" />
             </Field>
+            {isAdmin && (
+              <>
+                <Field label="Host paths" hint="directories this server may see · one per line, read-only · end with :rw to allow writes">
+                  <Textarea
+                    rows={Math.max(2, form.hostPaths.split("\n").length)}
+                    value={form.hostPaths}
+                    onChange={(e) => set({ hostPaths: e.target.value })}
+                    placeholder={"/srv/projects\n/srv/notes:rw"}
+                  />
+                </Field>
+                <div className="flex items-center gap-3">
+                  <Switch checked={form.unsandboxed} onChange={(v) => set({ unsandboxed: v })} label="Run without the sandbox" />
+                  <div>
+                    <div className="text-[13px] font-medium">Run without the sandbox</div>
+                    <div className={form.unsandboxed ? "text-xs text-warn" : "text-xs text-faint"}>
+                      {form.unsandboxed
+                        ? "This server will run as the switchboard itself, able to read every user's stored credentials. Only for software you trust."
+                        : "For the rare server that can't work sandboxed. Prefer host paths."}
+                    </div>
+                  </div>
+                </div>
+              </>
+            )}
             {!editing && !canRunLocal && <NeedsAdminNote />}
           </>
         ) : (
@@ -664,6 +711,15 @@ function usageText(share: OwnedShare): string {
 function ServerRow({ server, onEdit, onShare }: { server: ServerInfo; onEdit: () => void; onShare: () => void }) {
   const [expanded, setExpanded] = useState(false);
   const status = statusInfo(server);
+  const { data: auth } = useAuthMe();
+  const unsandboxedWhy =
+    server.type !== "stdio"
+      ? null
+      : server.unsandboxed
+        ? "The Admin turned the sandbox off for this server: it can read the switchboard's data"
+        : auth?.sandbox && !auth.sandbox.enabled
+          ? "The sandbox is off in Settings: local servers can read the switchboard's data"
+          : null;
 
   const toggle = useApiMutation(
     (enabled: boolean) => api(`/api/servers/${server.id}`, { method: "PATCH", json: { enabled } }),
@@ -722,6 +778,11 @@ function ServerRow({ server, onEdit, onShare }: { server: ServerInfo; onEdit: ()
             className="hidden sm:inline-flex"
           >
             <Users size={11} className="mr-1" /> shared with {sharedWithLabel(server.sharedWith)}
+          </Badge>
+        )}
+        {unsandboxedWhy && (
+          <Badge className="border-transparent bg-warn-bg font-semibold text-warn" title={unsandboxedWhy}>
+            no sandbox
           </Badge>
         )}
         <Badge className="hidden md:inline-flex">{transportLabel}</Badge>

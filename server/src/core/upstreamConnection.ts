@@ -24,6 +24,7 @@ import type { Stream } from "node:stream";
 import { expandArgs } from "../lib/argTemplate.js";
 import { decrypt } from "../lib/crypto.js";
 import { RingBuffer } from "../lib/ringBuffer.js";
+import type { StdioSpawn } from "../lib/sandbox.js";
 import type { ServerRow } from "../db/schema.js";
 
 export type UpstreamState = "disabled" | "connecting" | "connected" | "backoff" | "needs_auth" | "stopped";
@@ -41,6 +42,11 @@ export interface UpstreamEvents {
    * URL — persist `type: "http"` so the config matches reality. Returns the updated row.
    */
   onLegacySseFallback?: (serverId: number) => ServerRow | undefined;
+  /**
+   * Rewrite a stdio server's spawn to run inside its sandbox, with a line for its stderr log
+   * saying how it runs. Throws (and the server goes to backoff) when it can't be sandboxed.
+   */
+  wrapStdio: (row: ServerRow, spawn: StdioSpawn) => { spawn: StdioSpawn; note: string };
 }
 
 /**
@@ -198,13 +204,14 @@ export class UpstreamConnection {
       const userEnv: Record<string, string> = row.envJsonEnc ? JSON.parse(decrypt(row.envJsonEnc)) : {};
       const expanded = expandArgs(rawArgs, userEnv);
       if ("error" in expanded) throw new Error(expanded.error);
-      const transport = new StdioClientTransport({
+      const { spawn, note } = this.events.wrapStdio(row, {
         command: row.command ?? "",
         args: expanded.args,
         env: { ...getDefaultEnvironment(), ...userEnv },
         cwd: row.cwd ?? undefined,
-        stderr: "pipe",
       });
+      this.stderrLog.push(`[switchboard] ${note}`);
+      const transport = new StdioClientTransport({ ...spawn, stderr: "pipe" });
       const stderr = transport.stderr as Stream | null;
       stderr?.on("data", (chunk: Buffer) => this.stderrLog.pushChunk(chunk.toString("utf8")));
       return transport;

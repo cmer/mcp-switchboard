@@ -52,6 +52,15 @@ function resolveDataDir(): string {
 }
 
 /**
+ * Parent of each stdio server's sandbox home (its HOME, npm/uv caches and scratch files). Kept out
+ * of the data dir: a server's own directory is mounted into its sandbox, the data dir never is.
+ */
+function resolveSandboxDir(): string {
+  if (process.env.SANDBOX_DIR) return path.resolve(process.env.SANDBOX_DIR);
+  return path.join(process.env.XDG_CACHE_HOME || path.join(os.homedir(), ".cache"), "mcp-switchboard", "sandboxes");
+}
+
+/**
  * Built UI assets. When published to npm they are bundled at `<dist>/web`; in the monorepo they
  * sit at `web/dist`, two levels up from both `server/src` (tsx) and `server/dist` (compiled).
  */
@@ -91,6 +100,7 @@ export const config = {
   /** Interface for the MCP listener; falls back to HOST when unset. */
   mcpHost: process.env.MCP_HOST || process.env.HOST || undefined,
   dataDir: resolveDataDir(),
+  sandboxDir: resolveSandboxDir(),
   /** Base URL the browser can reach the switchboard at; used for the OAuth redirect URI. */
   publicUrl,
   /** Base URL agents reach `/mcp/<slug>` at; null when it is the same origin as the UI. */

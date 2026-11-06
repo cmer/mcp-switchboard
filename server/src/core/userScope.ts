@@ -18,6 +18,7 @@ import {
 } from "../db/schema.js";
 import { decrypt, encrypt, randomToken } from "../lib/crypto.js";
 import type { ParsedServer } from "../lib/importParser.js";
+import type { HostPath } from "../lib/sandbox.js";
 import { mergeSecrets } from "../lib/secretMap.js";
 import { USER_SETTING_DEFAULTS, USER_SETTING_KEYS, type UserSettingName } from "../lib/settings.js";
 import { isReservedSlug, isValidSlug, slugify } from "../lib/slug.js";
@@ -61,6 +62,9 @@ export interface NewServer {
   args?: string[];
   env?: Record<string, string>;
   cwd?: string | null;
+  /** Sandbox overrides; the REST layer lets only the Admin set them. */
+  unsandboxed?: boolean;
+  hostPaths?: HostPath[];
   // remote
   url?: string;
   authType?: "none" | "bearer" | "headers" | "oauth";
@@ -81,6 +85,9 @@ export interface ServerPatch {
   /** null clears; a null value keeps that key's stored value; keys left out are dropped. */
   env?: Record<string, string | null> | null;
   cwd?: string | null;
+  unsandboxed?: boolean;
+  /** null or [] clears. */
+  hostPaths?: HostPath[] | null;
   url?: string;
   authType?: "none" | "bearer" | "headers" | "oauth";
   bearerToken?: string | null;
@@ -471,6 +478,8 @@ class Scope implements UserScope {
           argsJson: input.args ? JSON.stringify(input.args) : null,
           envJsonEnc: encryptMap(input.env),
           cwd: input.cwd ?? null,
+          unsandboxed: input.unsandboxed ?? false,
+          hostPathsJson: hostPathsJson(input.hostPaths),
           url: input.url ?? null,
           authType: input.type === "stdio" ? "none" : (input.authType ?? "none"),
           bearerTokenEnc: input.bearerToken ? encrypt(input.bearerToken) : null,
@@ -516,6 +525,8 @@ class Scope implements UserScope {
       if (patch.command !== undefined) values.command = patch.command;
       if (patch.args !== undefined) values.argsJson = JSON.stringify(patch.args);
       if (patch.cwd !== undefined) values.cwd = patch.cwd;
+      if (patch.unsandboxed !== undefined) values.unsandboxed = patch.unsandboxed;
+      if (patch.hostPaths !== undefined) values.hostPathsJson = hostPathsJson(patch.hostPaths);
       if (patch.url !== undefined) values.url = patch.url;
       if (patch.authType !== undefined) values.authType = patch.authType;
       if (patch.env !== undefined) values.envJsonEnc = encryptMap(env.value);
@@ -980,6 +991,10 @@ function toReceived({
 }
 
 /** Empty maps are stored as "nothing", like an omitted one. */
+function hostPathsJson(paths: HostPath[] | null | undefined): string | null {
+  return paths && paths.length > 0 ? JSON.stringify(paths.map((h) => ({ path: h.path, writable: h.writable }))) : null;
+}
+
 function encryptMap(map: Record<string, string> | null | undefined): string | null {
   return map && Object.keys(map).length > 0 ? encrypt(JSON.stringify(map)) : null;
 }

@@ -7,6 +7,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Local (stdio) servers run in an OS sandbox.** Until now a local server ran as the switchboard
+  itself and could read `secret.key` and the database, which together decrypt every user's
+  credentials, plus the environment of every other local server. Now each one sees the system
+  read-only and its own folder (its `HOME`, where npm and uv cache), and nothing of the
+  switchboard's data, code or other servers. On Linux and in Docker this is bubblewrap with its own
+  process namespace; on macOS it's Seatbelt, which hides files but not other processes. The network
+  isn't restricted. If the sandbox is unavailable, local servers don't start and show why; they
+  never quietly run unsandboxed. See [docs/sandbox.md](docs/sandbox.md).
+- **Host paths and a per-server sandbox switch, for the Admin.** A filesystem or git server that
+  needs a directory on the host gets it mounted read-only, or writable with `:rw`, from its Edit
+  dialog. The rare server that can't work sandboxed can run without it. Both are the Admin's
+  alone, on their own servers, and an unsandboxed server shows a **no sandbox** badge.
+- **Settings → Local servers** shows how local servers run here, and lets the Admin turn the
+  sandbox off for everyone. Running servers restart into the new setting.
+
+### Changed
+
+- **Docker: `docker-compose.yml` adds three `security_opt` entries** (a seccomp profile that adds
+  only bubblewrap's syscalls to Docker's default, `systempaths=unconfined`, `apparmor=unconfined`),
+  because Docker's defaults refuse the user namespace the sandbox needs. If you run the image with
+  your own compose file or `docker run`, add them too, or turn the sandbox off in Settings. On
+  Ubuntu 23.10 and later, the host also needs `kernel.apparmor_restrict_unprivileged_userns=0`.
+- **Docker: the switchboard runs as the unprivileged `node` user** instead of root. On first start
+  the container hands the data directory over to `node` (uid 1000), so on the host `./data`
+  changes owner.
+
+### Fixed
+
+- **Docker: `uvx` servers work.** `uv` was installed into root's home, which wasn't on the
+  `PATH`, so `uvx` commands failed. It now lives in `/usr/local/bin`.
+
 ## [2.2.0] — 2026-10-26
 
 ### Added

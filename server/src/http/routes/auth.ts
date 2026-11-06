@@ -16,7 +16,9 @@ import {
   LOGIN_MODES,
   readAccessSettings,
   readLoginMode,
+  readSandboxEnabled,
   readSetting,
+  SANDBOX_SETTING,
   USER_SETTING_DEFAULTS,
   writeSetting,
   LOGIN_MODE_SETTING,
@@ -41,6 +43,7 @@ const authSettingsSchema = z.object({
   loginMode: z.enum(LOGIN_MODES).optional(),
   accessTeamDomain: z.string().max(200).optional(),
   accessAudTags: z.array(z.string().max(200)).max(20).optional(),
+  sandbox: z.boolean().optional(),
   // Per-user settings.
   autoEnableNewServers: z.boolean().optional(),
   allowServerRequests: z.boolean().optional(),
@@ -48,7 +51,7 @@ const authSettingsSchema = z.object({
 });
 
 /** The keys of `authSettingsSchema` that govern the whole install rather than the caller. */
-const INSTANCE_SETTING_KEYS = ["instanceName", "loginMode", "accessTeamDomain", "accessAudTags"] as const;
+const INSTANCE_SETTING_KEYS = ["instanceName", "loginMode", "accessTeamDomain", "accessAudTags", "sandbox"] as const;
 
 export function getSetting(ctx: AppContext, key: string): string | null {
   return readSetting(ctx.db, key);
@@ -56,6 +59,16 @@ export function getSetting(ctx: AppContext, key: string): string | null {
 
 function setSetting(ctx: AppContext, key: string, value: string): void {
   writeSetting(ctx.db, key, value);
+}
+
+function sandboxInfo(ctx: AppContext) {
+  const status = ctx.manager?.sandbox?.getStatus();
+  return {
+    enabled: readSandboxEnabled(ctx.db),
+    kind: status?.kind ?? null,
+    available: status?.available ?? false,
+    error: status?.error ?? "No sandbox is configured",
+  };
 }
 
 /** What the UI may know about a user; never the password hash or setup code. */
@@ -129,6 +142,8 @@ export function authRoutes(ctx: AppContext): Hono {
       capturePayloads: mine?.get("capturePayloads") ?? USER_SETTING_DEFAULTS.capturePayloads,
       // null = the endpoint lives on this same origin, so the UI can use window.location.
       mcpBaseUrl: config.mcpPublicUrl,
+      // How local servers run, for the Settings page and the badge on each local server.
+      ...(user ? { sandbox: sandboxInfo(ctx) } : {}),
     });
   });
 
@@ -258,6 +273,12 @@ export function authRoutes(ctx: AppContext): Hono {
       if (data.loginMode === "cloudflare" && currentMode !== "cloudflare") ctx.adminSessions.deleteAll();
       // Back to passwords: the Admin just proved who they are, so they stay signed in.
       if (data.loginMode === "password" && currentMode === "cloudflare") signIn(c, user);
+    }
+
+    if (data.sandbox !== undefined && data.sandbox !== readSandboxEnabled(ctx.db)) {
+      setSetting(ctx, SANDBOX_SETTING, data.sandbox ? "1" : "0");
+      // Running servers keep the sandbox they started with; restart them into the new setting.
+      await ctx.manager.restartStdio();
     }
 
     const mine = userScope(ctx.db, user).settings;
