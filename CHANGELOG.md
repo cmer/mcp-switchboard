@@ -21,6 +21,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   needs a directory on the host gets it mounted read-only, or writable with `:rw`, from its Edit
   dialog. The rare server that can't work sandboxed can run without it. Both are the Admin's
   alone, on their own servers, and an unsandboxed server shows a **no sandbox** badge.
+- **Home Assistant server template.** Pick it, enter your Home Assistant URL and a long-lived
+  access token, and agents get Home Assistant's built-in MCP server at `/api/mcp`. It uses a token
+  rather than OAuth because Home Assistant's OAuth expects client ID metadata documents, not the
+  dynamic client registration the switchboard uses.
 - **Settings → Local servers** shows how local servers run here, and lets the Admin turn the
   sandbox off for everyone. Running servers restart into the new setting.
 
