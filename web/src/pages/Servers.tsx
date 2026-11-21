@@ -5,7 +5,7 @@ import { toast } from "sonner";
 import { api } from "@/lib/api";
 import { useApiMutation, useAuthMe, useDirectory, useServerLogs, useServers, useServerTools, useShares } from "@/lib/hooks";
 import { maskedSecretLines, parseSecretLines, secretLinesHint } from "@/lib/secretLines";
-import { SERVER_TEMPLATES, templatePayload, templateReady, type ServerTemplate } from "@/lib/templates";
+import { SERVER_TEMPLATES, templatePayload, templateReady, templateUrl, type ServerTemplate } from "@/lib/templates";
 import type { HostPath, OwnedShare, ReceivedShare, ServerInfo, ShareOffer } from "@/lib/types";
 import { cn, timeAgo } from "@/lib/utils";
 import { PageBar } from "@/components/Layout";
@@ -351,7 +351,7 @@ function ServerDialog({
             </span>
             <span className="min-w-0 flex-1">
               <span className="block truncate font-mono text-xs text-faint">
-                {template.transport === "stdio" ? [template.command, ...(template.args ?? [])].join(" ") : template.url}
+                {template.transport === "stdio" ? [template.command, ...(template.args ?? [])].join(" ") : templateUrl(template, tValues)}
               </span>
             </span>
             <Badge>
