@@ -10,6 +10,7 @@ import {
   siGooglechrome,
   siGoogledrive,
   siGooglesheets,
+  siHomeassistant,
   siLinear,
   siNetlify,
   siNotion,
@@ -69,8 +70,8 @@ export interface TemplateInput {
   secret?: boolean;
   defaultValue?: string;
   /** Where the value lands in the create payload. */
-  apply: "env" | "header" | "urlParam" | "bearer";
-  /** Env var / header / query-param name (unused for bearer). */
+  apply: "env" | "header" | "urlParam" | "bearer" | "baseUrl";
+  /** Env var / header / query-param name (unused for bearer and baseUrl). */
   name: string;
 }
 
@@ -83,6 +84,7 @@ export interface ServerTemplate {
   transport: "stdio" | "http" | "sse";
   command?: string;
   args?: string[];
+  /** Full URL, or just the path when a `baseUrl` input supplies the origin. */
   url?: string;
   authType?: "oauth" | "none";
   inputs?: TemplateInput[];
@@ -363,6 +365,34 @@ const TEMPLATES: ServerTemplate[] = [
     ],
   },
   {
+    slug: "home-assistant",
+    name: "Home Assistant",
+    tagline: "Control and query your smart home",
+    logo: <Brand icon={siHomeassistant} />,
+    transport: "http",
+    url: "/api/mcp",
+    note: "Add the Model Context Protocol integration in Home Assistant first (Settings → Devices & services). Device control only sees entities exposed to voice assistants. Home Assistant's OAuth needs client ID metadata documents, which the switchboard doesn't use, so sign in with a long-lived access token instead.",
+    inputs: [
+      {
+        key: "baseUrl",
+        label: "Home Assistant URL",
+        hint: "e.g. http://homeassistant.local:8123, reachable from this switchboard",
+        required: true,
+        apply: "baseUrl",
+        name: "",
+      },
+      {
+        key: "token",
+        label: "Long-lived access token",
+        hint: "your Home Assistant profile → Security → Long-lived access tokens",
+        required: true,
+        secret: true,
+        apply: "bearer",
+        name: "Authorization",
+      },
+    ],
+  },
+  {
     slug: "zapier",
     name: "Zapier",
     tagline: "8,000+ apps via Zapier actions",
@@ -380,6 +410,14 @@ const TEMPLATES: ServerTemplate[] = [
 export const SERVER_TEMPLATES: ServerTemplate[] = [...TEMPLATES].sort((a, b) => a.name.localeCompare(b.name));
 
 /* ---------- payload builder ---------- */
+
+/** The template's URL, prefixed with the user's `baseUrl` input when it has one. */
+export function templateUrl(t: ServerTemplate, values: Record<string, string>): string {
+  const baseInput = t.inputs?.find((inp) => inp.apply === "baseUrl");
+  if (!baseInput) return t.url!;
+  const origin = values[baseInput.key]?.trim().replace(/\/+$/, "") || "<your URL>";
+  return origin + t.url!;
+}
 
 export function templatePayload(
   t: ServerTemplate,
@@ -401,7 +439,7 @@ export function templatePayload(
       ...(Object.keys(env).length > 0 ? { env } : {}),
     };
   }
-  let url = t.url!;
+  let url = templateUrl(t, values);
   const headers: Record<string, string> = {};
   let bearerToken: string | undefined;
   for (const inp of t.inputs ?? []) {
