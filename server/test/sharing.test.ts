@@ -42,6 +42,7 @@ import { SwitchboardHub } from "../src/core/switchboardHub.js";
 import { UpstreamManager } from "../src/core/upstreamManager.js";
 import type { AgentServerDeps } from "../src/core/agentServerFactory.js";
 import { loadOrCreateKey } from "../src/lib/crypto.js";
+import { OAuthDraftStore } from "../src/oauth/oauthDrafts.js";
 import { AgentOAuthStore } from "../src/oauth/agentOAuth.js";
 import { AdminSessionStore } from "../src/http/adminAuth.js";
 import { createApp } from "../src/http/app.js";
@@ -170,6 +171,7 @@ beforeEach(async () => {
     refresher: { cancel: vi.fn(), schedule: vi.fn() },
     adminSessions: new AdminSessionStore(db),
     agentOAuth: new AgentOAuthStore(db),
+    oauthDrafts: new OAuthDraftStore("http://localhost:8787"),
     makeOAuthProvider: vi.fn(),
     version: "test",
   };

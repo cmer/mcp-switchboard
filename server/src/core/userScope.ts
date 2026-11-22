@@ -110,6 +110,11 @@ export interface ScopedServers {
   update(id: number, patch: ServerPatch): { row: ServerRow; affectedAgentIds: number[] } | ScopeError;
   /** Collects the agents to notify *before* the cascade removes their matrix rows. */
   remove(id: number): { affectedAgentIds: number[] } | undefined;
+  /**
+   * The row `patch` would produce — applied to server `id` (an edit) or to nothing (a new server)
+   * — without writing anything. What a connection test runs. Id 0 for a new server.
+   */
+  preview(patch: ServerPatch, id?: number): { row: ServerRow } | ScopeError;
 }
 
 export interface AgentPatch {
@@ -543,6 +548,58 @@ class Scope implements UserScope {
           .run();
       }
       return { row: updated, affectedAgentIds };
+    },
+
+    preview: (patch, id) => {
+      const existing = id === undefined ? undefined : this.servers.get(id);
+      if (id !== undefined && !existing) return { error: "Not found", status: 404 };
+      const env = patch.env ? mergeSecrets("Env var", decryptMap(existing?.envJsonEnc ?? null), patch.env) : { value: patch.env };
+      if ("error" in env) return { error: env.error, status: 400 };
+      const headers = patch.headers
+        ? mergeSecrets("Header", decryptMap(existing?.headersJsonEnc ?? null), patch.headers)
+        : { value: patch.headers };
+      if ("error" in headers) return { error: headers.error, status: 400 };
+
+      const base: ServerRow = existing ?? {
+        id: 0,
+        userId: this.uid,
+        slug: "",
+        name: "",
+        description: null,
+        type: "http",
+        enabled: true,
+        command: null,
+        argsJson: null,
+        envJsonEnc: null,
+        cwd: null,
+        unsandboxed: false,
+        hostPathsJson: null,
+        url: null,
+        authType: "none",
+        bearerTokenEnc: null,
+        headersJsonEnc: null,
+        createdByAgentSlug: null,
+        createdAt: 0,
+        updatedAt: 0,
+      };
+      const row: ServerRow = { ...base };
+      if (patch.name !== undefined) row.name = patch.name;
+      if (patch.slug !== undefined) row.slug = patch.slug;
+      if (patch.type !== undefined) row.type = patch.type;
+      if (patch.command !== undefined) row.command = patch.command;
+      if (patch.args !== undefined) row.argsJson = JSON.stringify(patch.args);
+      if (patch.cwd !== undefined) row.cwd = patch.cwd;
+      if (patch.unsandboxed !== undefined) row.unsandboxed = patch.unsandboxed;
+      if (patch.hostPaths !== undefined) row.hostPathsJson = hostPathsJson(patch.hostPaths);
+      if (patch.url !== undefined) row.url = patch.url;
+      if (patch.authType !== undefined) row.authType = patch.authType;
+      if (patch.env !== undefined) row.envJsonEnc = encryptMap(env.value);
+      if (patch.bearerToken !== undefined) row.bearerTokenEnc = patch.bearerToken ? encrypt(patch.bearerToken) : null;
+      if (patch.headers !== undefined) row.headersJsonEnc = encryptMap(headers.value);
+      if (row.type === "stdio") row.authType = "none";
+      if (row.type === "stdio" && !row.command) return { error: "Local servers need a command", status: 400 };
+      if (row.type !== "stdio" && !row.url) return { error: "Remote servers need a URL", status: 400 };
+      return { row };
     },
 
     remove: (id) => {

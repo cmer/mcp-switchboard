@@ -11,7 +11,9 @@ import { parseImport, type ParsedServer } from "../../lib/importParser.js";
 import { slugify } from "../../lib/slug.js";
 import { addServers, detectAuth, fileServerRequest, insertServer } from "../../core/adminActions.js";
 import { nsName } from "../../core/namespace.js";
+import { testConnection } from "../../core/connectionTest.js";
 import { userScope, type OwnedShare, type UserScope } from "../../core/userScope.js";
+import { BorrowedOAuthProvider, type OAuthDraft } from "../../oauth/oauthDrafts.js";
 import { adminDeps, type AppContext } from "../context.js";
 import { serializeOwnedShare } from "./shares.js";
 
@@ -33,6 +35,8 @@ const createSchema = z.object({
   authType: z.enum(["none", "bearer", "headers", "oauth"]).optional().default("none"),
   bearerToken: z.string().optional(),
   headers: z.record(z.string(), z.string()).optional(),
+  /** OAuth already authorized during a connection test: adopt its tokens instead of authorizing again. */
+  oauthDraftId: z.string().max(100).optional(),
 });
 
 const patchSchema = createSchema.partial().extend({
@@ -120,7 +124,38 @@ function escalate(scope: UserScope, server: ParsedServer): number {
 
 const scopeOf = (ctx: AppContext, c: Context) => userScope(ctx.db, c.get("user"));
 
-const importSchema = z.object({ text: z.string().min(1), dryRun: z.boolean().optional().default(false) });
+const importSchema = z.object({
+  text: z.string().min(1),
+  dryRun: z.boolean().optional().default(false),
+  /** Slugs to add; the rest of the paste is skipped. Omitted = all. */
+  only: z.array(z.string()).optional(),
+  /** slug → OAuth draft authorized while testing that entry. */
+  oauthDrafts: z.record(z.string(), z.string()).optional(),
+});
+
+const testSchema = z.object({
+  /** The form as it stands: a create body, or for an edit a patch body (null secrets keep stored values). */
+  server: patchSchema.optional(),
+  /** Test an edit of this server: `server` is applied over its stored config. */
+  serverId: z.number().int().optional(),
+  /** One entry of a paste, by its position in the parse. */
+  import: z.object({ text: z.string().min(1), index: z.number().int().min(0) }).optional(),
+  oauthDraftId: z.string().max(100).optional(),
+});
+
+/**
+ * Give a server the registration and tokens its owner authorized while testing it. False when
+ * the draft isn't theirs, is for another URL, or never finished.
+ */
+function adoptOAuthDraft(ctx: AppContext, userId: number, draftId: string | undefined, row: ServerRow): boolean {
+  if (!draftId || row.authType !== "oauth" || !row.url) return false;
+  const claimed = ctx.oauthDrafts.claim(userId, draftId, row.url);
+  if (!claimed) return false;
+  const provider = ctx.makeOAuthProvider(row.id);
+  if (claimed.clientInfo) provider.saveClientInformation(claimed.clientInfo);
+  provider.saveTokens(claimed.tokens); // schedules the refresher too
+  return true;
+}
 
 export function serverRoutes(ctx: AppContext): Hono {
   const app = new Hono();
@@ -161,6 +196,7 @@ export function serverRoutes(ctx: AppContext): Hono {
 
     const result = insertServer(scope, input);
     if ("error" in result) return c.json({ error: result.error }, result.status);
+    adoptOAuthDraft(ctx, scope.user.id, input.oauthDraftId, result.row);
     await ctx.manager.reconcile();
     return c.json(serializeServer(ctx, result.row), 201);
   });
@@ -200,6 +236,12 @@ export function serverRoutes(ctx: AppContext): Hono {
       });
     }
 
+    if (body.data.only) {
+      const only = new Set(body.data.only);
+      parsed = parsed.filter((p) => only.has(p.slug));
+      if (parsed.length === 0) return c.json({ error: "Nothing selected to add" }, 400);
+    }
+
     // Local commands the caller can't run become escalated requests, one per server.
     const direct = parsed.filter((p) => p.type !== "stdio" || scope.canRunLocalCommands);
     const requested: { name: string; slug: string; requestId: number }[] = [];
@@ -213,10 +255,16 @@ export function serverRoutes(ctx: AppContext): Hono {
 
     const results = await addServers(adminDeps(ctx), scope, direct);
     const created: ReturnType<typeof serializeServer>[] = [];
-    results.forEach((result, i) => {
-      if ("error" in result) errors.push({ name: direct[i].name, error: result.error });
-      else created.push(serializeServer(ctx, result.row));
-    });
+    for (const [i, result] of results.entries()) {
+      if ("error" in result) {
+        errors.push({ name: direct[i].name, error: result.error });
+        continue;
+      }
+      if (adoptOAuthDraft(ctx, scope.user.id, body.data.oauthDrafts?.[result.row.slug], result.row)) {
+        await ctx.manager.restart(result.row.id); // it started as "needs auth" a moment ago
+      }
+      created.push(serializeServer(ctx, result.row));
+    }
     const nothingDone = created.length === 0 && requested.length === 0;
     return c.json(
       {
@@ -226,6 +274,86 @@ export function serverRoutes(ctx: AppContext): Hono {
       },
       errors.length > 0 && nothingDone ? 400 : 201,
     );
+  });
+
+  /*
+   * Run a config once without saving it: the form for a new server, an edit of an existing one,
+   * or one entry of a paste. OAuth servers authorize into a draft that saving then adopts.
+   */
+  app.post("/test", async (c) => {
+    const body = testSchema.safeParse(await c.req.json().catch(() => null));
+    if (!body.success) return c.json({ error: body.error.issues[0]?.message ?? "Invalid input" }, 400);
+    const scope = scopeOf(ctx, c);
+    const userId = scope.user.id;
+    const { serverId, oauthDraftId } = body.data;
+
+    let patch = body.data.server ?? {};
+    if (body.data.import) {
+      let entries: ParsedServer[];
+      try {
+        entries = parseImport(body.data.import.text);
+      } catch (err) {
+        return c.json({ error: err instanceof Error ? err.message : "Could not parse input" }, 400);
+      }
+      const entry = entries[body.data.import.index];
+      if (!entry) return c.json({ error: "No such entry in the pasted config" }, 400);
+      // Same upgrade the import makes, so the test runs what would be saved.
+      if ((await detectAuth([entry]))[0] === "oauth") entry.authType = "oauth";
+      patch = entry;
+    } else if (!body.data.server && serverId === undefined) {
+      return c.json({ error: "Nothing to test" }, 400);
+    }
+
+    const sandboxProblem = checkSandboxFields(scope, patch);
+    if (sandboxProblem) return c.json({ error: sandboxProblem.error }, sandboxProblem.status);
+    const preview = scope.servers.preview(patch, serverId);
+    if ("error" in preview) return c.json({ error: preview.error }, preview.status);
+    const row = preview.row;
+    // A test runs the command: the same permission as adding one.
+    if (row.type === "stdio" && !scope.canRunLocalCommands) {
+      return c.json({ error: "Testing a local command runs it, so it needs the Admin's \"can run local commands\" permission" }, 403);
+    }
+    if (row.url && !/^https?:\/\//i.test(row.url)) return c.json({ error: "URL must start with http:// or https://" }, 400);
+
+    const existing = serverId !== undefined ? scope.servers.get(serverId) : undefined;
+    const run = (provider?: BorrowedOAuthProvider | ReturnType<typeof ctx.oauthDrafts.provider>, source?: "stored" | "draft") =>
+      testConnection(row, {
+        wrapStdio: (r, spawn, homeName) => ctx.manager.wrapStdio(r, spawn, homeName),
+        sandboxRoot: ctx.manager.sandbox?.rootDir,
+        oauthProvider: provider,
+        oauthSource: source,
+      });
+
+    if (row.authType !== "oauth" || !row.url) return c.json(await run());
+
+    // An unchanged OAuth server tests with its own tokens (borrowed: the test can't disturb them).
+    // Anything else authorizes into a draft, which saving adopts.
+    let draft: OAuthDraft | undefined;
+    let report;
+    if (existing?.authType === "oauth" && existing.url === row.url && !oauthDraftId) {
+      report = await run(new BorrowedOAuthProvider(ctx.makeOAuthProvider(existing.id)), "stored");
+    } else {
+      draft = ctx.oauthDrafts.open(userId, row.url, oauthDraftId);
+      report = await run(ctx.oauthDrafts.provider(draft), "draft");
+    }
+    if (report.needsAuthorization) {
+      if (draft) ctx.oauthDrafts.discard(userId, draft.id);
+      draft = ctx.oauthDrafts.open(userId, row.url);
+      report = await run(ctx.oauthDrafts.provider(draft), "draft");
+    }
+    return c.json({ ...report, ...(draft ? { oauthDraftId: draft.id } : {}) });
+  });
+
+  /** Polled by the dialog while the consent popup is open. */
+  app.get("/test/oauth/:draftId", (c) => {
+    const draft = ctx.oauthDrafts.get(scopeOf(ctx, c).user.id, c.req.param("draftId"));
+    if (!draft) return c.json({ error: "This authorization expired. Test again to start over." }, 404);
+    return c.json({ status: draft.status, error: draft.error });
+  });
+
+  app.delete("/test/oauth/:draftId", (c) => {
+    ctx.oauthDrafts.discard(scopeOf(ctx, c).user.id, c.req.param("draftId"));
+    return c.json({ ok: true });
   });
 
   app.get("/:id", (c) => {
@@ -254,6 +382,7 @@ export function serverRoutes(ctx: AppContext): Hono {
 
     const result = scope.servers.update(id, input);
     if ("error" in result) return c.json({ error: result.error }, result.status);
+    if (adoptOAuthDraft(ctx, scope.user.id, input.oauthDraftId, result.row)) await ctx.manager.restart(id);
     await ctx.manager.reconcile();
     for (const agentId of result.affectedAgentIds) ctx.hub.notifyAgent(agentId);
     return c.json(serializeServer(ctx, result.row, scope.shares.forServer(id)));

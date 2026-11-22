@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Test a server's connection before adding it.** A wrong URL, a refused token or a command that
+  crashes used to show up only after saving, as a server stuck on "Unreachable". The Add and Edit
+  dialogs, the service templates and pasted configs now have **Test connection**. It runs the real
+  thing once without saving: it reaches the server, checks the credentials, does the MCP handshake
+  and lists the tools, then shows each step and how long it took. When something fails it says
+  where, and suggests the likely fix (switch to OAuth, switch transport, add the env var stderr
+  mentions), which you can apply in one click. A local command is tested in the same sandbox it
+  will run in, with a throwaway home folder, and its stderr is shown. Testing an edit leaves the
+  live connection alone. OAuth servers are authorized in a popup as part of the test, and saving
+  keeps those tokens, so there's no second sign-in. In a paste of several servers, each entry is
+  tested on its own and only the ones that pass are ticked to be added.
 - **Local (stdio) servers run in an OS sandbox.** Until now a local server ran as the switchboard
   itself and could read `secret.key` and the database, which together decrypt every user's
   credentials, plus the environment of every other local server. Now each one sees the system

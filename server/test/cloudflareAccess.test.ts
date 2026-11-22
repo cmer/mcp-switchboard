@@ -23,6 +23,7 @@ import { runCli, type CliIo } from "../src/cli.js";
 import { AccessVerifier, normalizeAudTags, normalizeTeamDomain } from "../src/lib/cloudflareAccess.js";
 import { encrypt, hashPassword, loadOrCreateKey } from "../src/lib/crypto.js";
 import { readLoginMode, writeSetting } from "../src/lib/settings.js";
+import { OAuthDraftStore } from "../src/oauth/oauthDrafts.js";
 import { AgentOAuthStore } from "../src/oauth/agentOAuth.js";
 import { AdminSessionStore } from "../src/http/adminAuth.js";
 import { createApp } from "../src/http/app.js";
@@ -129,6 +130,7 @@ beforeEach(async () => {
       hub,
       adminSessions: new AdminSessionStore(db),
       agentOAuth: new AgentOAuthStore(db),
+      oauthDrafts: new OAuthDraftStore("http://localhost:8787"),
       access: new AccessVerifier({ keysFor: () => createLocalJWKSet({ keys: [jwk] }) }),
     } as unknown as AppContext,
     path.join(tmp, "no-web"),

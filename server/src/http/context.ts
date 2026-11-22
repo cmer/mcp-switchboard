@@ -6,6 +6,7 @@ import type { TokenRefresher } from "../core/tokenRefresher.js";
 import type { UpstreamManager } from "../core/upstreamManager.js";
 import type { AgentOAuthStore } from "../oauth/agentOAuth.js";
 import type { DbOAuthProvider } from "../oauth/dbOAuthProvider.js";
+import type { OAuthDraftStore } from "../oauth/oauthDrafts.js";
 import type { AccessVerifier } from "../lib/cloudflareAccess.js";
 import type { AdminSessionStore } from "./adminAuth.js";
 
@@ -21,6 +22,8 @@ export interface AppContext {
   /** Tokens for clients that reach /mcp/<slug> over OAuth instead of a static bearer token. */
   agentOAuth: AgentOAuthStore;
   makeOAuthProvider: (serverId: number) => DbOAuthProvider;
+  /** OAuth authorized during a connection test, before the server exists. */
+  oauthDrafts: OAuthDraftStore;
   version: string;
 }
 

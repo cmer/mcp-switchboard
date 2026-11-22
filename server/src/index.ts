@@ -13,6 +13,7 @@ import { TokenRefresher } from "./core/tokenRefresher.js";
 import { UpstreamManager } from "./core/upstreamManager.js";
 import { AgentOAuthStore } from "./oauth/agentOAuth.js";
 import { DbOAuthProvider } from "./oauth/dbOAuthProvider.js";
+import { OAuthDraftStore } from "./oauth/oauthDrafts.js";
 import { runCli, processCliIo } from "./cli.js";
 import { AdminSessionStore } from "./http/adminAuth.js";
 import { createApp, createMcpApp } from "./http/app.js";
@@ -73,6 +74,7 @@ async function main(): Promise<void> {
     adminSessions: new AdminSessionStore(db),
     agentOAuth: new AgentOAuthStore(db),
     makeOAuthProvider,
+    oauthDrafts: new OAuthDraftStore(config.publicUrl),
     version: VERSION,
   };
 
