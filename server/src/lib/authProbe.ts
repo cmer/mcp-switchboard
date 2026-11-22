@@ -29,6 +29,33 @@ export function headerIndicatesOAuth(wwwAuthenticate: string | null): boolean {
   return wwwAuthenticate !== null && /resource_metadata/i.test(wwwAuthenticate);
 }
 
+/**
+ * After a 401/403: does this server speak the MCP OAuth flow? Yes when its WWW-Authenticate points
+ * at resource metadata, or an RFC 9728 well-known document answers.
+ */
+export async function advertisesOAuth(
+  serverUrl: string,
+  wwwAuthenticate: string | null,
+  fetchFn: typeof fetch = fetch,
+): Promise<boolean> {
+  if (headerIndicatesOAuth(wwwAuthenticate)) return true;
+  for (const wk of wellKnownUrls(serverUrl)) {
+    try {
+      const meta = await fetchFn(wk, {
+        headers: { Accept: "application/json" },
+        signal: AbortSignal.timeout(PROBE_TIMEOUT_MS),
+      });
+      if (meta.ok) {
+        const body: unknown = await meta.json().catch(() => null);
+        if (body && typeof body === "object") return true;
+      }
+    } catch {
+      // try the next well-known location
+    }
+  }
+  return false;
+}
+
 export async function probeAuth(serverUrl: string, fetchFn: typeof fetch = fetch): Promise<ProbeResult> {
   try {
     const res = await fetchFn(serverUrl, {
@@ -51,22 +78,7 @@ export async function probeAuth(serverUrl: string, fetchFn: typeof fetch = fetch
     });
 
     if (res.status === 401 || res.status === 403) {
-      if (headerIndicatesOAuth(res.headers.get("www-authenticate"))) return "oauth";
-      for (const wk of wellKnownUrls(serverUrl)) {
-        try {
-          const meta = await fetchFn(wk, {
-            headers: { Accept: "application/json" },
-            signal: AbortSignal.timeout(PROBE_TIMEOUT_MS),
-          });
-          if (meta.ok) {
-            const body: unknown = await meta.json().catch(() => null);
-            if (body && typeof body === "object") return "oauth";
-          }
-        } catch {
-          // try the next well-known location
-        }
-      }
-      return "auth_required";
+      return (await advertisesOAuth(serverUrl, res.headers.get("www-authenticate"), fetchFn)) ? "oauth" : "auth_required";
     }
 
     if (res.ok) return "none";

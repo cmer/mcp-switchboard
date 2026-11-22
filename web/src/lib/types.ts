@@ -273,3 +273,37 @@ export interface SetupCode {
 export interface DirectoryUser {
   username: string;
 }
+
+/* ---------- connection test (POST /api/servers/test) ---------- */
+
+export type TestStepStatus = "ok" | "fail" | "skip" | "waiting";
+
+export interface TestStep {
+  key: "start" | "reach" | "auth" | "oauth" | "authorize" | "handshake" | "list";
+  label: string;
+  status: TestStepStatus;
+  detail?: string;
+  ms?: number;
+}
+
+export type TestFix =
+  | { kind: "use_oauth" }
+  | { kind: "use_http" }
+  | { kind: "use_sse" }
+  | { kind: "set_token" }
+  | { kind: "add_env"; name: string };
+
+export interface TestReport {
+  ok: boolean;
+  headline: string;
+  ms: number;
+  steps: TestStep[];
+  server?: { name: string; version: string; protocolVersion?: string };
+  counts?: { tools: number; prompts: number; resources: number };
+  tools?: string[];
+  stderr?: string[];
+  hint?: string;
+  fix?: TestFix;
+  authorizeUrl?: string;
+  oauthDraftId?: string;
+}

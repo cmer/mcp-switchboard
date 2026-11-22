@@ -221,6 +221,11 @@ export interface SandboxOptions {
 export interface WrapRequest {
   serverId: number;
   hostPaths: HostPath[];
+  /**
+   * Name of the home directory under the sandbox root. Defaults to `server-<id>`; a connection
+   * test passes a throwaway name so it never touches a live server's files.
+   */
+  homeName?: string;
 }
 
 export class StdioSandbox {
@@ -294,7 +299,7 @@ export class StdioSandbox {
       if (bad) throw new Error(bad);
       if (!fs.existsSync(h.path)) throw new Error(`Host path "${h.path}" doesn't exist`);
     }
-    const home = path.join(this.rootDir, `server-${req.serverId}`);
+    const home = path.join(this.rootDir, req.homeName ?? `server-${req.serverId}`);
     fs.mkdirSync(path.join(home, "tmp"), { recursive: true, mode: 0o700 });
     const realHome = realpathOr(home);
     const hostPaths = req.hostPaths.map((h) => ({ path: realpathOr(h.path), writable: h.writable }));

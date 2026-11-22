@@ -1,17 +1,18 @@
 import { useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "react-router";
-import { ArrowLeft, Check, ChevronDown, ChevronUp, Inbox, Plus, Share2, Users } from "lucide-react";
+import { ArrowLeft, Check, ChevronDown, ChevronUp, Inbox, Plus, RotateCw, Share2, Users } from "lucide-react";
 import { toast } from "sonner";
 import { api } from "@/lib/api";
 import { useApiMutation, useAuthMe, useDirectory, useServerLogs, useServers, useServerTools, useShares } from "@/lib/hooks";
 import { maskedSecretLines, parseSecretLines, secretLinesHint } from "@/lib/secretLines";
 import { SERVER_TEMPLATES, templatePayload, templateReady, templateUrl, type ServerTemplate } from "@/lib/templates";
-import type { HostPath, OwnedShare, ReceivedShare, ServerInfo, ShareOffer } from "@/lib/types";
+import type { HostPath, OwnedShare, ReceivedShare, ServerInfo, ShareOffer, TestFix } from "@/lib/types";
 import { cn, timeAgo } from "@/lib/utils";
 import { PageBar } from "@/components/Layout";
 import { ServerRequestsPanel } from "@/components/ServerRequests";
 import { receivedStatus, StatusDot, statusInfo } from "@/components/StatusDot";
 import { Badge, Button, CopyButton, Dialog, Field, Input, Select, Switch, Tabs, Textarea } from "@/components/ui";
+import { TestPanel, useConnectionTest, type TestBody } from "@/components/ConnectionTest";
 
 /* ---------- add / edit dialog ---------- */
 
@@ -137,21 +138,40 @@ function ServerDialog({
   const [tValues, setTValues] = useState<Record<string, string>>({});
   const [form, setForm] = useState<FormState>(EMPTY);
   const [pasteText, setPasteText] = useState("");
-  const [preview, setPreview] = useState<{ servers: ImportPreviewEntry[]; error: string | null }>({
+  const [preview, setPreview] = useState<{ servers: ImportPreviewEntry[]; error: string | null; version: number }>({
     servers: [],
     error: null,
+    version: 0,
   });
+  const test = useConnectionTest();
+  /** Paste: per-entry test outcomes, the entries to add, and which row is open. */
+  const [pasteResults, setPasteResults] = useState<Record<string, { ok: boolean; draftId: string | null }>>({});
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [touched, setTouched] = useState<Set<string>>(new Set());
+  const [expanded, setExpanded] = useState<string | null>(null);
+
+  // A different thing to test: drop the last result (and any OAuth draft it holds).
+  const { reset: resetTest } = test;
+  useEffect(() => resetTest(), [open, view, form.kind, template, resetTest]);
 
   // debounced dry-run parse of pasted text
   useEffect(() => {
     if (form.kind !== "paste" || !pasteText.trim()) {
-      setPreview({ servers: [], error: null });
+      setPreview((p) => ({ servers: [], error: null, version: p.version + 1 }));
       return;
     }
     const t = setTimeout(() => {
       api<{ servers: ImportPreviewEntry[] }>("/api/servers/import", { method: "POST", json: { text: pasteText, dryRun: true } })
-        .then((res) => setPreview({ servers: res.servers, error: null }))
-        .catch((err) => setPreview({ servers: [], error: err instanceof Error ? err.message : "Could not parse" }));
+        .then((res) => {
+          setPreview((p) => ({ servers: res.servers, error: null, version: p.version + 1 }));
+          setPasteResults({});
+          setTouched(new Set());
+          setExpanded(null);
+          setSelected(new Set(res.servers.filter((e) => !e.slugTaken).map((e) => e.slug)));
+        })
+        .catch((err) =>
+          setPreview((p) => ({ servers: [], error: err instanceof Error ? err.message : "Could not parse", version: p.version + 1 })),
+        );
     }, 350);
     return () => clearTimeout(t);
   }, [form.kind, pasteText]);
@@ -205,13 +225,13 @@ function ServerDialog({
     () =>
       api<ServerInfo | RequestedResponse>("/api/servers", {
         method: "POST",
-        json: templatePayload(template!, tSlug, tValues),
+        json: { ...templatePayload(template!, tSlug, tValues), ...(test.oauthDraftId ? { oauthDraftId: test.oauthDraftId } : {}) },
       }),
     ["servers", "agents", "requests"],
     (created) => {
       onClose();
       if (wasRequested(created)) toast.info(SENT_TO_ADMIN);
-      else if (created.authType === "oauth") void startOAuth(created.id);
+      else if (created.authType === "oauth" && created.oauthStatus !== "ok") void startOAuth(created.id);
       else toast.success(`${created.name} added`);
     },
   );
@@ -224,7 +244,13 @@ function ServerDialog({
         requested?: { name: string; slug: string; requestId: number }[];
       }>("/api/servers/import", {
         method: "POST",
-        json: { text: pasteText },
+        json: {
+          text: pasteText,
+          only: preview.servers.filter((p) => selected.has(p.slug)).map((p) => p.slug),
+          oauthDrafts: Object.fromEntries(
+            Object.entries(pasteResults).flatMap(([slug, r]) => (r.draftId && selected.has(slug) ? [[slug, r.draftId]] : [])),
+          ),
+        },
       }),
     ["servers", "agents", "requests"],
     (res) => {
@@ -239,7 +265,7 @@ function ServerDialog({
         );
       }
       for (const e of res.errors) toast.error(`${e.name}: ${e.error}`);
-      const oauthCreated = res.created.filter((s) => s.authType === "oauth");
+      const oauthCreated = res.created.filter((s) => s.authType === "oauth" && s.oauthStatus !== "ok");
       if (oauthCreated.length === 1) {
         void startOAuth(oauthCreated[0].id); // straight to the consent page
       } else if (oauthCreated.length > 1) {
@@ -256,32 +282,36 @@ function ServerDialog({
     return Object.keys(parsed).length > 0 ? parsed : null;
   };
 
+  /** The manual form as a create (or patch) body; shared by Save and Test. */
+  const formPayload = () => {
+    const base = {
+      name: form.name,
+      ...(form.slug ? { slug: form.slug } : {}),
+      description: form.description.trim() || null,
+      type: form.kind === "stdio" ? ("stdio" as const) : form.remoteType,
+    };
+    return form.kind === "stdio"
+      ? {
+          ...base,
+          command: form.command,
+          args: form.args.split("\n").map((s) => s.trim()).filter(Boolean),
+          env: secrets(form.env, editing?.envKeys ?? []),
+          cwd: form.cwd || null,
+          // Only the Admin decides what of the host a local command can reach.
+          ...(isAdmin ? { unsandboxed: form.unsandboxed, hostPaths: parseHostPathLines(form.hostPaths) } : {}),
+        }
+      : {
+          ...base,
+          url: form.url,
+          authType: form.authType,
+          ...(form.authType === "bearer" && form.bearerToken ? { bearerToken: form.bearerToken } : {}),
+          ...(form.authType === "headers" ? { headers: secrets(form.headers, editing?.headerKeys ?? []) } : {}),
+        };
+  };
+
   const save = useApiMutation(
     async () => {
-      const base = {
-        name: form.name,
-        ...(form.slug ? { slug: form.slug } : {}),
-        description: form.description.trim() || null,
-        type: form.kind === "stdio" ? ("stdio" as const) : form.remoteType,
-      };
-      const payload =
-        form.kind === "stdio"
-          ? {
-              ...base,
-              command: form.command,
-              args: form.args.split("\n").map((s) => s.trim()).filter(Boolean),
-              env: secrets(form.env, editing?.envKeys ?? []),
-              cwd: form.cwd || null,
-              // Only the Admin decides what of the host a local command can reach.
-              ...(isAdmin ? { unsandboxed: form.unsandboxed, hostPaths: parseHostPathLines(form.hostPaths) } : {}),
-            }
-          : {
-              ...base,
-              url: form.url,
-              authType: form.authType,
-              ...(form.authType === "bearer" && form.bearerToken ? { bearerToken: form.bearerToken } : {}),
-              ...(form.authType === "headers" ? { headers: secrets(form.headers, editing?.headerKeys ?? []) } : {}),
-            };
+      const payload = { ...formPayload(), ...(test.oauthDraftId ? { oauthDraftId: test.oauthDraftId } : {}) };
       return api<ServerInfo | RequestedResponse>(editing ? `/api/servers/${editing.id}` : "/api/servers", {
         method: editing ? "PATCH" : "POST",
         json: payload,
@@ -291,10 +321,106 @@ function ServerDialog({
     (created) => {
       onClose();
       if (wasRequested(created)) toast.info(SENT_TO_ADMIN);
-      else if (!editing && created.authType === "oauth") void startOAuth(created.id);
+      else if (!editing && created.authType === "oauth" && created.oauthStatus !== "ok") void startOAuth(created.id);
       else toast.success(editing ? "Server updated" : "Server added");
     },
   );
+
+  /* ---------- connection test ---------- */
+
+  const isLocal = view === "template" ? template?.transport === "stdio" : form.kind === "stdio";
+  const testBody: TestBody | null =
+    view === "template" && template
+      ? { server: templatePayload(template, tSlug, tValues) }
+      : view === "manual" && form.kind !== "paste"
+        ? { ...(editing ? { serverId: editing.id } : {}), server: formPayload() }
+        : null;
+  const testReady =
+    view === "template" && template
+      ? templateReady(template, tValues)
+      : form.kind === "stdio"
+        ? !!form.command.trim()
+        : !!form.url.trim();
+  // Running a local command is the same permission as adding one; without it, it goes to the Admin.
+  const canTest = !!testBody && !(isLocal && !canRunLocal);
+  const isOAuthForm = view === "template" ? template?.authType === "oauth" : form.kind === "remote" && form.authType === "oauth";
+  // An edit of an authorized OAuth server at the same URL tests with its stored tokens: no popup.
+  const usesStoredTokens =
+    !!editing && editing.authType === "oauth" && editing.oauthStatus === "ok" && form.url === editing.url;
+  const needsConsent = isOAuthForm && !test.oauthDraftId && !usesStoredTokens;
+  const testStale = !!testBody && test.isStale(testBody);
+  const testFailed = !!test.report && !test.report.ok && !test.waiting && !testStale;
+
+  const runTest = () => testBody && test.run(testBody, { oauth: needsConsent });
+
+  const applyFix = (fix: TestFix) => {
+    if (fix.kind === "use_oauth") set({ authType: "oauth" });
+    else if (fix.kind === "set_token") set({ authType: "bearer" });
+    else if (fix.kind === "use_http") set({ remoteType: "http" });
+    else if (fix.kind === "use_sse") set({ remoteType: "sse" });
+    else if (fix.kind === "add_env") {
+      const env = form.env.replace(/\n+$/, "");
+      set({ env: env ? `${env}\n${fix.name}=` : `${fix.name}=` });
+      setTimeout(() => {
+        const el = document.getElementById("server-env") as HTMLTextAreaElement | null;
+        el?.focus();
+        el?.setSelectionRange(el.value.length, el.value.length);
+      }, 0);
+    }
+  };
+
+  const testButton = canTest ? (
+    test.waiting ? (
+      <Button onClick={() => test.reset()}>Stop</Button>
+    ) : (
+      <Button disabled={test.running || !testReady} onClick={runTest}>
+        {test.running ? (
+          "Testing…"
+        ) : test.report ? (
+          <>
+            <RotateCw size={12} /> Test again
+          </>
+        ) : needsConsent ? (
+          "Authorize & test"
+        ) : (
+          "Test connection"
+        )}
+      </Button>
+    )
+  ) : null;
+
+  const testPanel = (
+    <TestPanel
+      test={test}
+      stale={testStale}
+      onFix={view === "manual" ? applyFix : undefined}
+      slowHint={isLocal ? "The first run of an npx or uvx package downloads it, which can take a minute." : undefined}
+    />
+  );
+
+  /* ---------- paste: one test per entry ---------- */
+
+  const onPasteResult = (slug: string, ok: boolean, draftId: string | null) => {
+    setPasteResults((r) => ({ ...r, [slug]: { ok, draftId } }));
+    if (!touched.has(slug)) {
+      setSelected((sel) => {
+        const next = new Set(sel);
+        if (ok) next.add(slug);
+        else next.delete(slug);
+        return next;
+      });
+    }
+  };
+  const toggleSelected = (slug: string) => {
+    setTouched((t) => new Set(t).add(slug));
+    setSelected((sel) => {
+      const next = new Set(sel);
+      if (next.has(slug)) next.delete(slug);
+      else next.add(slug);
+      return next;
+    });
+  };
+  const pasteChosen = preview.servers.filter((p) => selected.has(p.slug) && !p.slugTaken);
 
   return (
     <Dialog
@@ -379,12 +505,13 @@ function ServerDialog({
           {template.note && (
             <p className="rounded-[10px] bg-panel-2 px-3 py-2 text-xs leading-relaxed text-muted-fg">{template.note}</p>
           )}
-          {template.authType === "oauth" && (
+          {template.authType === "oauth" && !test.report && !test.running && (
             <p className="rounded-[10px] bg-primary-soft px-3 py-2 text-xs leading-relaxed text-muted-fg">
-              <b className="font-semibold text-foreground">You'll authorize in your browser after saving.</b> Tokens are stored
-              encrypted and refreshed automatically in the background.
+              <b className="font-semibold text-foreground">You'll authorize in your browser.</b> Test first to do it now, or
+              it happens after saving. Tokens are stored encrypted and refreshed automatically in the background.
             </p>
           )}
+          {testPanel}
         </div>
       ) : (
       <>
@@ -412,28 +539,26 @@ function ServerDialog({
             <p className="rounded-[10px] bg-err-bg px-3 py-2 text-xs text-err">{preview.error}</p>
           )}
           {preview.servers.length > 0 && (
-            <div className="overflow-hidden rounded-[10px] border border-border-soft">
-              {preview.servers.map((p) => (
-                <div key={p.slug} className="flex items-center gap-2.5 border-b border-border-soft bg-panel px-3 py-2 last:border-0">
-                  <span className="min-w-0 flex-1">
-                    <span className="block font-mono text-xs font-semibold">{p.slug}</span>
-                    <span className="block truncate text-[11px] text-faint">
-                      {p.type === "stdio" ? [p.command, ...p.args].join(" ") : p.url}
-                      {p.envKeys.length > 0 && ` · env: ${p.envKeys.join(", ")}`}
-                    </span>
-                  </span>
-                  <Badge>{p.type === "stdio" ? "Local · stdio" : `Remote · ${p.authType === "none" ? p.type.toUpperCase() : p.authType}`}</Badge>
-                  {p.detectedAuth === "oauth" && (
-                    <Badge className="border-transparent bg-primary-soft font-semibold text-primary">OAuth detected</Badge>
-                  )}
-                  {p.detectedAuth === "auth_required" && (
-                    <Badge className="border-transparent bg-warn-bg font-semibold text-warn">needs a token</Badge>
-                  )}
-                  {p.slugTaken && <Badge className="border-transparent bg-warn-bg font-semibold text-warn">slug taken</Badge>}
-                  {p.needsApproval && <Badge className="border-transparent bg-warn-bg font-semibold text-warn">needs Admin approval</Badge>}
-                </div>
-              ))}
-            </div>
+            <>
+              <div className="overflow-hidden rounded-[10px] border border-border-soft">
+                {preview.servers.map((p, i) => (
+                  <PasteRow
+                    key={`${preview.version}:${p.slug}`}
+                    entry={p}
+                    index={i}
+                    text={pasteText}
+                    selected={selected.has(p.slug)}
+                    onToggle={() => toggleSelected(p.slug)}
+                    expanded={expanded === p.slug}
+                    onExpand={() => setExpanded((e) => (e === p.slug ? null : p.slug))}
+                    onResult={(ok, draftId) => onPasteResult(p.slug, ok, draftId)}
+                  />
+                ))}
+              </div>
+              <p className="text-xs text-faint">
+                Entries test as soon as they're pasted. Those that pass are ticked; tick a failed one to add it anyway.
+              </p>
+            </>
           )}
         </div>
       ) : (
@@ -476,7 +601,7 @@ function ServerDialog({
               label="Environment variables"
               hint={secretLinesHint("KEY", !!editing?.hasEnv, "KEY=value per line · encrypted at rest")}
             >
-              <Textarea rows={Math.max(2, form.env.split("\n").length)} value={form.env} onChange={(e) => set({ env: e.target.value })} placeholder="GITHUB_TOKEN=ghp_…" />
+              <Textarea id="server-env" rows={Math.max(2, form.env.split("\n").length)} value={form.env} onChange={(e) => set({ env: e.target.value })} placeholder="GITHUB_TOKEN=ghp_…" />
             </Field>
             {isAdmin && (
               <>
@@ -537,14 +662,16 @@ function ServerDialog({
                 <Textarea rows={Math.max(2, form.headers.split("\n").length)} value={form.headers} onChange={(e) => set({ headers: e.target.value })} placeholder="X-Api-Key=…" />
               </Field>
             )}
-            {form.authType === "oauth" && (
+            {form.authType === "oauth" && !test.report && !test.running && !usesStoredTokens && (
               <p className="rounded-[10px] bg-primary-soft px-3 py-2 text-xs leading-relaxed text-muted-fg">
-                <b className="font-semibold text-foreground">You'll authorize in your browser after saving.</b> Tokens are stored
-                encrypted and refreshed automatically in the background — agents never see them and auth never goes stale.
+                <b className="font-semibold text-foreground">You'll authorize in your browser.</b> Test first to do it now, or it
+                happens after saving. Tokens are stored encrypted and refreshed automatically in the background — agents never
+                see them and auth never goes stale.
               </p>
             )}
           </>
         )}
+        {testPanel}
       </div>
       )}
       </>
@@ -560,44 +687,179 @@ function ServerDialog({
           <Button variant="ghost" onClick={onClose}>
             Cancel
           </Button>
+          {testButton}
           {view === "template" && template ? (
             <Button
               variant="primary"
-              disabled={saveTemplate.isPending || !tSlug || !templateReady(template, tValues)}
+              disabled={saveTemplate.isPending || !tSlug || !templateReady(template, tValues) || test.running || test.waiting}
               onClick={() => saveTemplate.mutate(undefined)}
             >
-              {template.transport === "stdio" && !canRunLocal ? "Send to Admin" : template.authType === "oauth" ? "Add & authorize" : "Add server"}
+              {template.transport === "stdio" && !canRunLocal
+                ? "Send to Admin"
+                : testFailed
+                  ? "Add anyway"
+                  : template.authType === "oauth" && !test.oauthDraftId
+                    ? "Add & authorize"
+                    : "Add server"}
             </Button>
           ) : form.kind === "paste" ? (
             <Button
               variant="primary"
-              disabled={doImport.isPending || preview.servers.length === 0 || preview.servers.every((p) => p.slugTaken)}
+              disabled={doImport.isPending || pasteChosen.length === 0}
               onClick={() => doImport.mutate(undefined)}
             >
-              {preview.servers.length > 0 && preview.servers.every((p) => p.needsApproval)
+              {pasteChosen.length > 0 && pasteChosen.every((p) => p.needsApproval)
                 ? "Send to Admin"
                 : preview.servers.length > 1
-                  ? `Add ${preview.servers.length} servers`
+                  ? `Add ${pasteChosen.length} of ${preview.servers.length}`
                   : "Add server"}
             </Button>
           ) : (
             <Button
               variant="primary"
-              disabled={save.isPending || !form.name || (form.kind === "stdio" ? !form.command : !form.url)}
+              disabled={
+                save.isPending || !form.name || (form.kind === "stdio" ? !form.command : !form.url) || test.running || test.waiting
+              }
               onClick={() => save.mutate(undefined)}
             >
               {editing
-                ? "Save changes"
+                ? testFailed
+                  ? "Save anyway"
+                  : "Save changes"
                 : form.kind === "stdio" && !canRunLocal
                   ? "Send to Admin"
-                  : form.kind === "remote" && form.authType === "oauth"
-                    ? "Save & authorize"
-                    : "Add server"}
+                  : testFailed
+                    ? "Add anyway"
+                    : form.kind === "remote" && form.authType === "oauth" && !test.oauthDraftId
+                      ? "Save & authorize"
+                      : "Add server"}
             </Button>
           )}
         </div>
       )}
     </Dialog>
+  );
+}
+
+/* ---------- paste: one row per pasted entry ---------- */
+
+function PasteRow({
+  entry: p,
+  index,
+  text,
+  selected,
+  onToggle,
+  expanded,
+  onExpand,
+  onResult,
+}: {
+  entry: ImportPreviewEntry;
+  index: number;
+  text: string;
+  selected: boolean;
+  onToggle: () => void;
+  expanded: boolean;
+  onExpand: () => void;
+  onResult: (ok: boolean, draftId: string | null) => void;
+}) {
+  const test = useConnectionTest();
+  // The row remounts when a new parse lands; until then, keep testing the text it was parsed from.
+  const [pasted] = useState(text);
+  const body: TestBody = { import: { text: pasted, index } };
+  const isOAuth = p.authType === "oauth" || p.detectedAuth === "oauth";
+  // Saving these files a request instead, and a taken slug can't be added: neither is worth a run.
+  const testable = !p.needsApproval && !p.slugTaken;
+
+  // OAuth waits for a click (the consent popup needs one); everything else tests straight away.
+  const { run, report, oauthDraftId, reset } = test;
+  useEffect(() => {
+    if (testable && !isOAuth) run({ import: { text: pasted, index } });
+    return () => reset();
+  }, [testable, isOAuth, run, reset, pasted, index]);
+
+  const reportOk = report?.ok;
+  const waitingHere = test.waiting;
+  useEffect(() => {
+    if (report && !waitingHere) onResult(!!reportOk, oauthDraftId);
+    // Once per outcome: onResult is a fresh closure every render.
+  }, [report, waitingHere]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  let status: React.ReactNode = null;
+  if (test.running) {
+    status = (
+      <span className="inline-flex items-center gap-1.5 text-xs font-semibold text-primary">
+        <RotateCw size={11} className="animate-spin motion-reduce:animate-none" /> Testing…
+      </span>
+    );
+  } else if (test.waiting) {
+    status = <span className="text-xs font-semibold text-primary">Waiting for approval…</span>;
+  } else if (report) {
+    status = (
+      <button
+        onClick={onExpand}
+        className={cn(
+          "inline-flex cursor-pointer items-center gap-1.5 text-xs font-semibold whitespace-nowrap",
+          report.ok ? "text-ok" : "text-err",
+        )}
+        aria-expanded={expanded}
+      >
+        <span className="size-[7px] rounded-full bg-current" />
+        {report.ok ? `${report.counts?.tools ?? 0} tool${report.counts?.tools === 1 ? "" : "s"}` : "Failed"}
+        {expanded ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
+      </button>
+    );
+  } else if (test.error) {
+    status = <span className="text-xs font-semibold text-err">{test.error}</span>;
+  } else if (testable && isOAuth) {
+    status = (
+      <Button size="sm" onClick={() => run(body, { oauth: true })}>
+        Authorize &amp; test
+      </Button>
+    );
+  }
+
+  return (
+    <div className="border-b border-border-soft last:border-0">
+      <div className={cn("flex items-center gap-2.5 bg-panel px-3 py-2", report && !report.ok && !test.waiting && "bg-err-bg/40")}>
+        <input
+          type="checkbox"
+          checked={selected && !p.slugTaken}
+          disabled={p.slugTaken}
+          onChange={onToggle}
+          aria-label={`Add ${p.slug}`}
+          className="size-3.5 shrink-0 cursor-pointer accent-[var(--primary)] disabled:cursor-not-allowed"
+        />
+        <span className="min-w-0 flex-1">
+          <span className="block font-mono text-xs font-semibold">{p.slug}</span>
+          <span className="block truncate text-[11px] text-faint">
+            {p.type === "stdio" ? [p.command, ...p.args].join(" ") : p.url}
+            {p.envKeys.length > 0 && ` · env: ${p.envKeys.join(", ")}`}
+          </span>
+        </span>
+        <Badge>{p.type === "stdio" ? "Local · stdio" : `Remote · ${p.authType === "none" ? p.type.toUpperCase() : p.authType}`}</Badge>
+        {p.detectedAuth === "oauth" && !report && (
+          <Badge className="border-transparent bg-primary-soft font-semibold text-primary">OAuth detected</Badge>
+        )}
+        {p.detectedAuth === "auth_required" && !report && (
+          <Badge className="border-transparent bg-warn-bg font-semibold text-warn">needs a token</Badge>
+        )}
+        {p.slugTaken && <Badge className="border-transparent bg-warn-bg font-semibold text-warn">slug taken</Badge>}
+        {p.needsApproval && <Badge className="border-transparent bg-warn-bg font-semibold text-warn">needs Admin approval</Badge>}
+        {status}
+      </div>
+      {(expanded || test.waiting) && (
+        <div className="flex flex-col gap-2 bg-background px-3 py-2.5">
+          <TestPanel test={test} />
+          {!test.waiting && !test.running && (
+            <div className="flex justify-end">
+              <Button size="sm" onClick={() => run(body, { oauth: isOAuth && !oauthDraftId })}>
+                <RotateCw size={11} /> Test again
+              </Button>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
   );
 }
 

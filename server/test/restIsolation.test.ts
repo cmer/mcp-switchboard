@@ -10,6 +10,7 @@ import type { AgentRow } from "../src/db/schema.js";
 import { RequestLogger } from "../src/core/requestLogger.js";
 import { userScope } from "../src/core/userScope.js";
 import { loadOrCreateKey } from "../src/lib/crypto.js";
+import { OAuthDraftStore } from "../src/oauth/oauthDrafts.js";
 import { AgentOAuthStore } from "../src/oauth/agentOAuth.js";
 import { AdminSessionStore } from "../src/http/adminAuth.js";
 import { createApp } from "../src/http/app.js";
@@ -66,6 +67,7 @@ beforeEach(async () => {
     manager: { reconcile: vi.fn(async () => {}), get: () => undefined, restart: vi.fn(async () => true), statusSummary: () => ({}) },
     adminSessions: new AdminSessionStore(db),
     agentOAuth: new AgentOAuthStore(db),
+    oauthDrafts: new OAuthDraftStore("http://localhost:8787"),
     version: "test",
   };
   app = createApp(ctx as unknown as AppContext, path.join(tmp, "no-web"), { serveMcp: false });
@@ -83,6 +85,29 @@ beforeEach(async () => {
 afterEach(() => {
   closeDb();
   fs.rmSync(tmp, { recursive: true, force: true });
+});
+
+describe("REST isolation: connection tests", () => {
+  it("won't test another user's server or show their OAuth drafts", async () => {
+    expect((await call("POST", "/api/servers/test", admin, { serverId: b.serverId })).status).toBe(404);
+    expect((await call("GET", "/api/servers/test/oauth/not-a-draft", bob)).status).toBe(404);
+  });
+
+  it("refuses to run a local command for a user who can't run one", async () => {
+    const res = await call("POST", "/api/servers/test", bob, { server: { name: "x", type: "stdio", command: "echo" } });
+    expect(res.status).toBe(403);
+  });
+
+  it("refuses sandbox overrides from anyone but the Admin", async () => {
+    const res = await call("POST", "/api/servers/test", bob, {
+      server: { name: "x", type: "stdio", command: "echo", unsandboxed: true },
+    });
+    expect(res.status).toBe(403);
+  });
+
+  it("needs something to test", async () => {
+    expect((await call("POST", "/api/servers/test", admin, {})).status).toBe(400);
+  });
 });
 
 describe("REST isolation: servers", () => {

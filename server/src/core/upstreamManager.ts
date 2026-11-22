@@ -1,5 +1,6 @@
 import type { Db } from "../db/index.js";
-import { parseHostPaths, SANDBOX_LABELS, type StdioSandbox } from "../lib/sandbox.js";
+import { parseHostPaths, SANDBOX_LABELS, type StdioSandbox, type StdioSpawn } from "../lib/sandbox.js";
+import type { ServerRow } from "../db/schema.js";
 import { readSandboxEnabled } from "../lib/settings.js";
 import { markServerStreamableHttp, runnableServers, serverById } from "./systemView.js";
 import { UpstreamConnection, type ChangedKind, type UpstreamEvents, type UpstreamState } from "./upstreamConnection.js";
@@ -25,15 +26,21 @@ export class UpstreamManager {
       makeOAuthProvider: this.makeOAuthProvider,
       // The connection adopts the returned row, so reconcile() sees a matching updatedAt and won't restart it.
       onLegacySseFallback: (id) => markServerStreamableHttp(this.db, id),
-      wrapStdio: (row, spawn) => {
-        if (row.unsandboxed) return { spawn, note: "running without a sandbox: the Admin turned it off for this server" };
-        if (!readSandboxEnabled(this.db)) return { spawn, note: "running without a sandbox: it's turned off in Settings" };
-        if (!this.sandbox) throw new Error("Local servers run in a sandbox, and none is configured");
-        const wrapped = this.sandbox.wrap(spawn, { serverId: row.id, hostPaths: parseHostPaths(row.hostPathsJson) });
-        const kind = this.sandbox.getStatus().kind;
-        return { spawn: wrapped, note: `running in a ${kind ? SANDBOX_LABELS[kind] : ""} sandbox` };
-      },
+      wrapStdio: (row, spawn) => this.wrapStdio(row, spawn),
     };
+  }
+
+  /**
+   * Rewrite a stdio spawn to run in `row`'s sandbox. `homeName` swaps the server's own home for
+   * another directory under the sandbox root (a connection test's throwaway one).
+   */
+  wrapStdio(row: ServerRow, spawn: StdioSpawn, homeName?: string): { spawn: StdioSpawn; note: string } {
+    if (row.unsandboxed) return { spawn, note: "running without a sandbox: the Admin turned it off for this server" };
+    if (!readSandboxEnabled(this.db)) return { spawn, note: "running without a sandbox: it's turned off in Settings" };
+    if (!this.sandbox) throw new Error("Local servers run in a sandbox, and none is configured");
+    const wrapped = this.sandbox.wrap(spawn, { serverId: row.id, hostPaths: parseHostPaths(row.hostPathsJson), homeName });
+    const kind = this.sandbox.getStatus().kind;
+    return { spawn: wrapped, note: `running in a ${kind ? SANDBOX_LABELS[kind] : ""} sandbox` };
   }
 
   /** Restart every live stdio server, so a change to the sandbox setting takes effect now. */

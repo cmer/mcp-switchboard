@@ -198,61 +198,12 @@ export class UpstreamConnection {
   }
 
   private buildTransport(type: ServerRow["type"] = this.row.type): Transport {
-    const row = this.row;
-    if (type === "stdio") {
-      const rawArgs: string[] = row.argsJson ? JSON.parse(row.argsJson) : [];
-      const userEnv: Record<string, string> = row.envJsonEnc ? JSON.parse(decrypt(row.envJsonEnc)) : {};
-      const expanded = expandArgs(rawArgs, userEnv);
-      if ("error" in expanded) throw new Error(expanded.error);
-      const { spawn, note } = this.events.wrapStdio(row, {
-        command: row.command ?? "",
-        args: expanded.args,
-        env: { ...getDefaultEnvironment(), ...userEnv },
-        cwd: row.cwd ?? undefined,
-      });
-      this.stderrLog.push(`[switchboard] ${note}`);
-      const transport = new StdioClientTransport({ ...spawn, stderr: "pipe" });
-      const stderr = transport.stderr as Stream | null;
-      stderr?.on("data", (chunk: Buffer) => this.stderrLog.pushChunk(chunk.toString("utf8")));
-      return transport;
-    }
-
-    if (!row.url) throw new Error("Remote server has no URL");
-    const url = new URL(row.url);
-    const headers = this.buildHeaders();
-    const authProvider = row.authType === "oauth" ? this.events.makeOAuthProvider(row.id) : undefined;
-
-    if (type === "http") {
-      return new StreamableHTTPClientTransport(url, {
-        authProvider,
-        requestInit: headers ? { headers } : undefined,
-      });
-    }
-
-    // SSE: setting eventSourceInit suppresses the auto Authorization header, so we
-    // inject headers through a custom fetch that applies to every request instead.
-    const fetchWithHeaders: typeof fetch | undefined = headers
-      ? (input, init) => {
-          const merged = new Headers(init?.headers);
-          for (const [k, v] of Object.entries(headers)) if (!merged.has(k)) merged.set(k, v);
-          return fetch(input, { ...init, headers: merged });
-        }
-      : undefined;
-    return new SSEClientTransport(url, {
-      authProvider,
-      fetch: fetchWithHeaders,
+    return buildUpstreamTransport(this.row, type, {
+      wrapStdio: this.events.wrapStdio,
+      makeOAuthProvider: this.events.makeOAuthProvider,
+      onNote: (line) => this.stderrLog.push(`[switchboard] ${line}`),
+      onStderr: (chunk) => this.stderrLog.pushChunk(chunk),
     });
-  }
-
-  private buildHeaders(): Record<string, string> | null {
-    const row = this.row;
-    if (row.authType === "bearer" && row.bearerTokenEnc) {
-      return { Authorization: `Bearer ${decrypt(row.bearerTokenEnc)}` };
-    }
-    if (row.authType === "headers" && row.headersJsonEnc) {
-      return JSON.parse(decrypt(row.headersJsonEnc)) as Record<string, string>;
-    }
-    return null;
   }
 
   private async connect(): Promise<void> {
@@ -481,4 +432,74 @@ export class UpstreamConnection {
       }),
     );
   }
+}
+
+export interface TransportDeps {
+  wrapStdio: UpstreamEvents["wrapStdio"];
+  makeOAuthProvider: (serverId: number) => OAuthClientProvider;
+  /** A line about how the process runs (sandbox note). */
+  onNote?: (line: string) => void;
+  /** Raw stderr output of a stdio server. */
+  onStderr?: (chunk: string) => void;
+}
+
+/** Headers a remote server is called with: its bearer token or its custom headers, decrypted. */
+export function upstreamHeaders(row: ServerRow): Record<string, string> | null {
+  if (row.authType === "bearer" && row.bearerTokenEnc) {
+    return { Authorization: `Bearer ${decrypt(row.bearerTokenEnc)}` };
+  }
+  if (row.authType === "headers" && row.headersJsonEnc) {
+    return JSON.parse(decrypt(row.headersJsonEnc)) as Record<string, string>;
+  }
+  return null;
+}
+
+/**
+ * The client transport for `row` spoken over `type`. Shared by live connections and the
+ * connection test, so a test exercises exactly what the server will run.
+ */
+export function buildUpstreamTransport(row: ServerRow, type: ServerRow["type"], deps: TransportDeps): Transport {
+  if (type === "stdio") {
+    const rawArgs: string[] = row.argsJson ? JSON.parse(row.argsJson) : [];
+    const userEnv: Record<string, string> = row.envJsonEnc ? JSON.parse(decrypt(row.envJsonEnc)) : {};
+    const expanded = expandArgs(rawArgs, userEnv);
+    if ("error" in expanded) throw new Error(expanded.error);
+    const { spawn, note } = deps.wrapStdio(row, {
+      command: row.command ?? "",
+      args: expanded.args,
+      env: { ...getDefaultEnvironment(), ...userEnv },
+      cwd: row.cwd ?? undefined,
+    });
+    deps.onNote?.(note);
+    const transport = new StdioClientTransport({ ...spawn, stderr: "pipe" });
+    const stderr = transport.stderr as Stream | null;
+    stderr?.on("data", (chunk: Buffer) => deps.onStderr?.(chunk.toString("utf8")));
+    return transport;
+  }
+
+  if (!row.url) throw new Error("Remote server has no URL");
+  const url = new URL(row.url);
+  const headers = upstreamHeaders(row);
+  const authProvider = row.authType === "oauth" ? deps.makeOAuthProvider(row.id) : undefined;
+
+  if (type === "http") {
+    return new StreamableHTTPClientTransport(url, {
+      authProvider,
+      requestInit: headers ? { headers } : undefined,
+    });
+  }
+
+  // SSE: setting eventSourceInit suppresses the auto Authorization header, so we
+  // inject headers through a custom fetch that applies to every request instead.
+  const fetchWithHeaders: typeof fetch | undefined = headers
+    ? (input, init) => {
+        const merged = new Headers(init?.headers);
+        for (const [k, v] of Object.entries(headers)) if (!merged.has(k)) merged.set(k, v);
+        return fetch(input, { ...init, headers: merged });
+      }
+    : undefined;
+  return new SSEClientTransport(url, {
+    authProvider,
+    fetch: fetchWithHeaders,
+  });
 }

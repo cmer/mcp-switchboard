@@ -63,6 +63,21 @@ function mountMcp(app: Hono, ctx: AppContext): void {
   app.all("/mcp/:agentSlug", mcpEndpointHandler(ctx));
 }
 
+const escapeHtml = (s: string) =>
+  s.replace(/[&<>"']/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[ch]!);
+
+/** The consent popup's last page: tell the dialog, then close. */
+function draftDonePage(ok: boolean, reason?: string): string {
+  const text = ok ? "Authorized. You can close this window." : `Authorization failed: ${escapeHtml(reason ?? "unknown error")}`;
+  return `<!doctype html><html><head><meta charset="utf-8"><title>MCP Switchboard</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>body{font:14px/1.5 system-ui,sans-serif;margin:0;display:flex;min-height:100vh;align-items:center;justify-content:center;background:#0a0b0e;color:#edeef2}p{max-width:28rem;padding:0 16px;text-align:center}</style>
+</head><body><p>${text}</p><script>
+try { window.opener && window.opener.postMessage({ type: "switchboard-oauth-test", ok: ${ok} }, location.origin); } catch (e) {}
+${ok ? "setTimeout(function () { window.close(); }, 600);" : ""}
+</script></body></html>`;
+}
+
 export function createApp(ctx: AppContext, webDist: string, opts: { serveMcp?: boolean } = {}): Hono {
   const app = new Hono();
 
@@ -78,6 +93,25 @@ export function createApp(ctx: AppContext, webDist: string, opts: { serveMcp?: b
   // --- OAuth callback (arrives via the owner's browser redirect, session cookie and all) ---
   app.get("/oauth/callback", async (c) => {
     const { code, state, error } = c.req.query();
+
+    // A connection test's draft: finish in the popup and hand control back to the dialog.
+    const draft = state ? ctx.oauthDrafts.byState(state) : undefined;
+    if (draft) {
+      const user = await requestUser(c, ctx);
+      if (!user || user.id !== draft.userId) return c.html(draftDonePage(false, "Sign in as the user who started this test."), 403);
+      try {
+        if (error) throw new Error(error);
+        if (!code) throw new Error("missing authorization code");
+        const result = await auth(ctx.oauthDrafts.provider(draft), { serverUrl: draft.serverUrl, authorizationCode: code });
+        if (result !== "AUTHORIZED") throw new Error("authorization did not complete");
+        return c.html(draftDonePage(true));
+      } catch (err) {
+        draft.status = "failed";
+        draft.error = err instanceof Error ? err.message : String(err);
+        return c.html(draftDonePage(false, draft.error));
+      }
+    }
+
     if (error) return c.redirect(`/servers?auth=failed&reason=${encodeURIComponent(error)}`);
     if (!code || !state) return c.redirect("/servers?auth=failed&reason=missing_code_or_state");
     const user = await requestUser(c, ctx);
