@@ -11,3 +11,6 @@ server/dist/
 server/README.md
 server/LICENSE
 *.tgz
+
+# impeccable design-hook cache (config.json is shared)
+.impeccable/hook.cache.json
