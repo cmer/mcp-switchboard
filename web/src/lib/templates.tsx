@@ -62,6 +62,18 @@ const firecrawlLogo = (
 
 /* ---------- catalog ---------- */
 
+export type TemplateCategory = "code" | "cloud" | "web" | "work" | "commerce" | "home";
+
+/** Picker order. `short` labels the filter chips, `name` the group headings. */
+export const TEMPLATE_CATEGORIES: { id: TemplateCategory; name: string; short: string }[] = [
+  { id: "code", name: "Code & issues", short: "Code" },
+  { id: "cloud", name: "Cloud & deploy", short: "Cloud" },
+  { id: "web", name: "Web & browser", short: "Web" },
+  { id: "work", name: "Productivity", short: "Work" },
+  { id: "commerce", name: "Commerce", short: "Commerce" },
+  { id: "home", name: "Home", short: "Home" },
+];
+
 export interface TemplateInput {
   key: string;
   label: string;
@@ -80,6 +92,9 @@ export interface ServerTemplate {
   name: string;
   /** One-liner; also becomes the default agent-facing description. */
   tagline: string;
+  category: TemplateCategory;
+  /** Extra search terms beyond the name and tagline. */
+  keywords?: string;
   logo: ReactNode;
   transport: "stdio" | "http" | "sse";
   command?: string;
@@ -118,6 +133,8 @@ function googleWorkspace(
     slug,
     name,
     tagline,
+    category: "work",
+    keywords: `google ${tool}`,
     logo: <Brand icon={icon} />,
     transport: "stdio",
     command: "uvx",
@@ -130,6 +147,8 @@ function googleWorkspace(
 const TEMPLATES: ServerTemplate[] = [
   {
     slug: "github",
+    category: "code",
+    keywords: "git code pr",
     name: "GitHub",
     tagline: "Repos, issues, pull requests",
     logo: <Brand icon={siGithub} />,
@@ -150,6 +169,8 @@ const TEMPLATES: ServerTemplate[] = [
   },
   {
     slug: "linear",
+    category: "code",
+    keywords: "tickets tracker",
     name: "Linear",
     tagline: "Issues, projects, cycles",
     logo: <Brand icon={siLinear} />,
@@ -159,6 +180,8 @@ const TEMPLATES: ServerTemplate[] = [
   },
   {
     slug: "appsignal",
+    category: "code",
+    keywords: "monitoring apm",
     name: "AppSignal",
     tagline: "Errors, traces, logs, metrics",
     logo: <Brand icon={siAppsignal} />,
@@ -168,6 +191,8 @@ const TEMPLATES: ServerTemplate[] = [
   },
   {
     slug: "atlassian",
+    category: "code",
+    keywords: "jira confluence tickets docs",
     name: "Jira & Confluence",
     tagline: "Atlassian issues and wiki",
     logo: <Brand icon={siAtlassian} />,
@@ -177,6 +202,8 @@ const TEMPLATES: ServerTemplate[] = [
   },
   {
     slug: "notion",
+    category: "work",
+    keywords: "docs wiki notes",
     name: "Notion",
     tagline: "Pages and databases",
     logo: <Brand icon={siNotion} />,
@@ -186,6 +213,8 @@ const TEMPLATES: ServerTemplate[] = [
   },
   {
     slug: "stripe",
+    category: "commerce",
+    keywords: "billing",
     name: "Stripe",
     tagline: "Payments data and docs",
     logo: <Brand icon={siStripe} />,
@@ -195,6 +224,8 @@ const TEMPLATES: ServerTemplate[] = [
   },
   {
     slug: "shopify",
+    category: "commerce",
+    keywords: "ecommerce store",
     name: "Shopify",
     tagline: "Shopify dev docs & GraphQL schemas",
     logo: <Brand icon={siShopify} />,
@@ -204,6 +235,8 @@ const TEMPLATES: ServerTemplate[] = [
   },
   {
     slug: "vercel",
+    category: "cloud",
+    keywords: "deploy hosting",
     name: "Vercel",
     tagline: "Projects and deployments",
     logo: <Brand icon={siVercel} />,
@@ -213,6 +246,8 @@ const TEMPLATES: ServerTemplate[] = [
   },
   {
     slug: "netlify",
+    category: "cloud",
+    keywords: "deploy hosting",
     name: "Netlify",
     tagline: "Sites and deploys",
     logo: <Brand icon={siNetlify} />,
@@ -222,6 +257,8 @@ const TEMPLATES: ServerTemplate[] = [
   },
   {
     slug: "cloudflare",
+    category: "cloud",
+    keywords: "dns edge",
     name: "Cloudflare",
     tagline: "Workers, KV, R2, D1",
     logo: <Brand icon={siCloudflare} />,
@@ -231,6 +268,8 @@ const TEMPLATES: ServerTemplate[] = [
   },
   {
     slug: "supabase",
+    category: "cloud",
+    keywords: "database sql",
     name: "Supabase",
     tagline: "Postgres, auth, storage",
     logo: <Brand icon={siSupabase} />,
@@ -240,6 +279,8 @@ const TEMPLATES: ServerTemplate[] = [
   },
   {
     slug: "context7",
+    category: "code",
+    keywords: "documentation",
     name: "Context7",
     tagline: "Up-to-date library docs",
     logo: context7Logo,
@@ -259,6 +300,8 @@ const TEMPLATES: ServerTemplate[] = [
   },
   {
     slug: "shadcn",
+    category: "code",
+    keywords: "react ui components",
     name: "shadcn/ui",
     tagline: "Component registry, add & search",
     logo: <Brand icon={siShadcnui} />,
@@ -268,6 +311,8 @@ const TEMPLATES: ServerTemplate[] = [
   },
   {
     slug: "firecrawl",
+    category: "web",
+    keywords: "scrape",
     name: "Firecrawl",
     tagline: "Scrape & crawl the web",
     logo: firecrawlLogo,
@@ -277,6 +322,8 @@ const TEMPLATES: ServerTemplate[] = [
   },
   {
     slug: "exa",
+    category: "web",
+    keywords: "search",
     name: "Exa",
     tagline: "AI web search",
     logo: <img src={exaLogo} alt="" className="size-6 rounded-[5px]" />,
@@ -297,6 +344,8 @@ const TEMPLATES: ServerTemplate[] = [
   },
   {
     slug: "brave-search",
+    category: "web",
+    keywords: "search",
     name: "Brave Search",
     tagline: "Web search API",
     logo: <Brand icon={siBrave} />,
@@ -317,6 +366,8 @@ const TEMPLATES: ServerTemplate[] = [
   },
   {
     slug: "playwright",
+    category: "web",
+    keywords: "browser automation testing",
     name: "Playwright",
     tagline: "Drive a real browser",
     logo: <img src={playwrightLogo} alt="" className="size-6" />,
@@ -326,6 +377,8 @@ const TEMPLATES: ServerTemplate[] = [
   },
   {
     slug: "chrome-devtools",
+    category: "web",
+    keywords: "browser debug",
     name: "Chrome DevTools",
     tagline: "Console, network, traces",
     logo: <Brand icon={siGooglechrome} />,
@@ -335,6 +388,8 @@ const TEMPLATES: ServerTemplate[] = [
   },
   {
     slug: "aws",
+    category: "cloud",
+    keywords: "amazon s3 ec2 lambda",
     name: "AWS",
     tagline: "Call AWS APIs",
     logo: awsLogo,
@@ -355,6 +410,8 @@ const TEMPLATES: ServerTemplate[] = [
   },
   {
     slug: "home-assistant",
+    category: "home",
+    keywords: "smart home iot lights",
     name: "Home Assistant",
     tagline: "Control and query your smart home",
     logo: <Brand icon={siHomeassistant} />,
@@ -383,6 +440,8 @@ const TEMPLATES: ServerTemplate[] = [
   },
   {
     slug: "zapier",
+    category: "work",
+    keywords: "automation",
     name: "Zapier",
     tagline: "8,000+ apps via Zapier actions",
     logo: <Brand icon={siZapier} />,
@@ -397,6 +456,27 @@ const TEMPLATES: ServerTemplate[] = [
 ];
 
 export const SERVER_TEMPLATES: ServerTemplate[] = [...TEMPLATES].sort((a, b) => a.name.localeCompare(b.name));
+
+/* ---------- search ---------- */
+
+/**
+ * How well `t` matches the (lower-cased, trimmed) query; 0 means no match. Name prefixes beat
+ * word prefixes beat substrings beat tagline/keyword hits beat category-name hits beat a loose
+ * subsequence.
+ */
+export function templateScore(t: ServerTemplate, q: string): number {
+  if (!q) return 1;
+  const name = t.name.toLowerCase();
+  if (name.startsWith(q)) return 100;
+  if (name.split(/[\s/&]+/).some((w) => w.startsWith(q))) return 80;
+  if (name.includes(q)) return 60;
+  if (`${t.tagline} ${t.keywords ?? ""} ${t.slug}`.toLowerCase().includes(q)) return 30;
+  // A hit on the category name alone ("deploy" in "Cloud & deploy") ranks below what the service does.
+  if (TEMPLATE_CATEGORIES.find((c) => c.id === t.category)!.name.toLowerCase().includes(q)) return 20;
+  let i = 0;
+  for (const ch of name) if (ch === q[i]) i++;
+  return i === q.length ? 10 : 0;
+}
 
 /* ---------- payload builder ---------- */
 

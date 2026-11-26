@@ -1,0 +1,17 @@
+{
+  "detector": {
+    "ignoreRules": [],
+    "ignoreFiles": [],
+    "ignoreValues": [
+      {
+        "rule": "border-accent-on-rounded",
+        "value": "*",
+        "files": [
+          "web/src/components/TemplatePicker.tsx"
+        ],
+        "createdAt": "2026-11-26T16:05:05.094Z",
+        "reason": "Claude: L297 is the <kbd> keycap; the 2px bottom border is the deliberate key-depth effect, not an accent stripe"
+      }
+    ]
+  }
+}
