@@ -13,6 +13,7 @@ import { ServerRequestsPanel } from "@/components/ServerRequests";
 import { receivedStatus, StatusDot, statusInfo } from "@/components/StatusDot";
 import { Badge, Button, CopyButton, Dialog, Field, Input, Select, Switch, Tabs, Textarea } from "@/components/ui";
 import { TestPanel, useConnectionTest, type TestBody } from "@/components/ConnectionTest";
+import { TemplatePicker } from "@/components/TemplatePicker";
 
 /* ---------- add / edit dialog ---------- */
 
@@ -216,8 +217,16 @@ function ServerDialog({
     setView("template");
   };
 
-  const openManual = (kind: FormState["kind"]) => {
-    setForm({ ...EMPTY, kind });
+  /** `prefill` is what was typed in the picker search: a URL, a command line or a config to paste. */
+  const openManual = (kind: FormState["kind"], prefill?: string) => {
+    const [command = "", ...args] = kind === "stdio" && prefill ? prefill.split(/\s+/) : [];
+    setForm({
+      ...EMPTY,
+      kind,
+      ...(kind === "remote" && prefill ? { url: prefill } : {}),
+      ...(kind === "stdio" && prefill ? { command, args: args.join("\n") } : {}),
+    });
+    setPasteText(kind === "paste" && prefill ? prefill : "");
     setView("manual");
   };
 
@@ -429,7 +438,7 @@ function ServerDialog({
       title={editing ? `Edit ${editing.name}` : view === "template" ? `Add ${template?.name}` : "Add server"}
       description={
         view === "picker"
-          ? "Pick a service, or set one up manually."
+          ? "Search for a service, or set one up manually."
           : view === "template"
             ? template?.tagline
             : form.kind === "stdio"
@@ -441,34 +450,7 @@ function ServerDialog({
       wide
     >
       {view === "picker" ? (
-        <>
-          <div className="grid grid-cols-4 gap-2">
-            {SERVER_TEMPLATES.map((t) => (
-              <button
-                key={t.slug}
-                onClick={() => selectTemplate(t)}
-                className="group flex cursor-pointer flex-col items-center gap-2 rounded-xl border border-border-soft bg-panel px-1 py-3 transition-colors hover:border-primary hover:bg-panel-2 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
-              >
-                <span className="flex size-11 items-center justify-center rounded-[12px] border border-border-soft bg-white shadow-sm">
-                  {t.logo}
-                </span>
-                <span className="text-center text-xs leading-tight font-semibold tracking-tight">{t.name}</span>
-              </button>
-            ))}
-          </div>
-          <div className="mt-4 flex items-center gap-2 border-t border-border-soft pt-4">
-            <span className="mr-1 text-xs text-faint">Something else:</span>
-            <Button size="sm" onClick={() => openManual("stdio")}>
-              Local command
-            </Button>
-            <Button size="sm" onClick={() => openManual("remote")}>
-              Remote URL
-            </Button>
-            <Button size="sm" onClick={() => openManual("paste")}>
-              Paste config
-            </Button>
-          </div>
-        </>
+        <TemplatePicker templates={SERVER_TEMPLATES} onPick={selectTemplate} onManual={openManual} />
       ) : view === "template" && template ? (
         <div className="flex flex-col gap-3">
           <div className="flex items-center gap-3 rounded-[10px] border border-border-soft bg-panel-2/40 px-3 py-2.5">
