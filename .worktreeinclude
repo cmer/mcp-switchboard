@@ -1,0 +1,10 @@
+# Gitignored files copied into new worktrees (gitignore syntax; only files that
+# are also gitignored are copied). Runtime state (data/, ~/.config/mcp-switchboard)
+# is deliberately left out so worktrees never share a database or secret.key.
+
+# Dependencies, so a fresh worktree can build and test without `npm install`.
+# Matches the root workspace install plus any nested server/ or web/ ones.
+node_modules/
+
+# Local environment overrides.
+.env
