@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **The Firecrawl template connects to Firecrawl's hosted MCP endpoint with OAuth.** It used to run
+  `firecrawl-mcp` locally with a pasted API key, which needed "can run local commands" and kept the
+  key in the switchboard. It now points at `https://mcp.firecrawl.dev/v2/mcp-oauth`, so you sign in
+  to Firecrawl instead and nothing runs on the host.
+- **Building from source uses pnpm instead of npm.** pnpm keeps one copy of each dependency and
+  links it into every checkout, so several clones or worktrees no longer each carry a full
+  `node_modules`. Run `corepack enable` once, then `pnpm install && pnpm build`. The Docker image
+  builds the same way and comes out slightly smaller. Installing the published package with
+  `npx @cmer/mcp-switchboard` is unchanged.
 - **The Add server picker is now search-first.** With 25 service templates, the grid of logos had
   become a wall to scan. The dialog now opens with the cursor in a search box that ranks matches by
   name, what the service does and its category ("email" finds Gmail, "deploy" finds Vercel and

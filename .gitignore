@@ -12,5 +12,8 @@ server/README.md
 server/LICENSE
 *.tgz
 
+# pnpm is the package manager; an npm lockfile would only drift
+package-lock.json
+
 # impeccable design-hook cache (config.json is shared)
 .impeccable/hook.cache.json

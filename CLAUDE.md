@@ -17,15 +17,17 @@ Self-hosted MCP switchboard for a household (npm: `@cmer/mcp-switchboard`). Each
 - `docker/`: `seccomp.json` (Docker's default plus bubblewrap's syscalls, regenerate with `scripts/seccomp-profile.mjs`) and `entrypoint.sh` (hands volumes to `node`, drops root).
 - `web/` — React 19 + Vite + Tailwind v4 + shadcn-style components, TanStack Query, react-router. Dev server proxies `/api`, `/oauth`, `/mcp` to `:8787`.
 - Runtime state (`switchboard.db`, `secret.key`) lives in `~/.config/mcp-switchboard` by default — see `server/src/config.ts` for the `DATA_DIR` > `XDG_CONFIG_HOME` > legacy-`./data` precedence. Never commit it.
-- `server/` is the published npm package `@cmer/mcp-switchboard` (root is a private workspace root). `scripts/prepack.mjs` bundles `web/dist` into `server/dist/web`; `npm run build` must run first.
+- `server/` is the published npm package `@cmer/mcp-switchboard` (root is a private workspace root). `scripts/prepack.mjs` bundles `web/dist` into `server/dist/web`; `pnpm build` must run first.
+- Package manager is **pnpm** (version pinned by `packageManager` in `package.json`; `corepack enable` picks it up). Workspaces are declared in `pnpm-workspace.yaml`, which also lists the dependencies allowed to run install scripts (`allowBuilds`): add a new native dependency there or it installs without its binary. Don't commit a `package-lock.json`.
 - Detailed design decisions: `/Users/carl/.claude/plans/looks-good-now-create-validated-eclipse.md` (SDK API facts, tricky-parts answers).
 
 ## Commands
 
-- `npm run dev` — server (tsx watch, :8787) + Vite (:5173) in parallel
-- `npm run build` — web build then server tsc
-- `npm start` — production server serving `web/dist`
-- `npm test` — vitest in `server/`
+- `pnpm install` — install all workspaces
+- `pnpm dev` — server (tsx watch, :8787) + Vite (:5173) in parallel
+- `pnpm build` — web build then server tsc
+- `pnpm start` — production server serving `web/dist`
+- `pnpm test` — vitest in `server/`
 
 ## Changelog
 
@@ -60,6 +62,6 @@ internal test churn). On release, rename `[Unreleased]` to the new version with 
 
 ## Verification
 
-MCP endpoint smoke test (after `npm run dev`): POST `initialize` to `http://localhost:8787/mcp/<username>/<agent>` with `Authorization: Bearer <token>` and `Accept: application/json, text/event-stream`, capture `mcp-session-id` response header, then `tools/list`. Interactive: `npx @modelcontextprotocol/inspector`.
+MCP endpoint smoke test (after `pnpm dev`): POST `initialize` to `http://localhost:8787/mcp/<username>/<agent>` with `Authorization: Bearer <token>` and `Accept: application/json, text/event-stream`, capture `mcp-session-id` response header, then `tools/list`. Interactive: `npx @modelcontextprotocol/inspector`.
 
 End any turn that reports on long-running or delegated work with a short status: **Goal**, **Done**, **Next**, **Needs you** (or "nothing").
