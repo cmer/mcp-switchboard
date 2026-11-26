@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **The Firecrawl template connects to Firecrawl's hosted MCP endpoint with OAuth.** It used to run
+  `firecrawl-mcp` locally with a pasted API key, which needed "can run local commands" and kept the
+  key in the switchboard. It now points at `https://mcp.firecrawl.dev/v2/mcp-oauth`, so you sign in
+  to Firecrawl instead and nothing runs on the host.
+
 ## [2.3.0] — 2026-11-22
 
 ### Added
