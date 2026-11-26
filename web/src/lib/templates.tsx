@@ -271,20 +271,9 @@ const TEMPLATES: ServerTemplate[] = [
     name: "Firecrawl",
     tagline: "Scrape & crawl the web",
     logo: firecrawlLogo,
-    transport: "stdio",
-    command: "npx",
-    args: ["-y", "firecrawl-mcp"],
-    inputs: [
-      {
-        key: "apiKey",
-        label: "API key",
-        hint: "from firecrawl.dev",
-        required: true,
-        secret: true,
-        apply: "env",
-        name: "FIRECRAWL_API_KEY",
-      },
-    ],
+    transport: "http",
+    url: "https://mcp.firecrawl.dev/v2/mcp-oauth",
+    authType: "oauth",
   },
   {
     slug: "exa",
