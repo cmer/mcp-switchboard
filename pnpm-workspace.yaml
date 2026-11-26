@@ -1,0 +1,9 @@
+packages:
+  - server
+  - web
+
+# pnpm runs no dependency install scripts unless they're listed here. better-sqlite3 needs its
+# native binding; esbuild (vite, tsx, drizzle-kit) needs its platform binary.
+allowBuilds:
+  better-sqlite3: true
+  esbuild: true
