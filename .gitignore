@@ -11,3 +11,6 @@ server/dist/
 server/README.md
 server/LICENSE
 *.tgz
+
+# pnpm is the package manager; an npm lockfile would only drift
+package-lock.json

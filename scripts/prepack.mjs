@@ -15,7 +15,7 @@ const webDist = path.join(root, "web", "dist");
 
 function require(condition, message) {
   if (!condition) {
-    console.error(`prepack: ${message}\nprepack: run \`npm run build\` from the repo root first.`);
+    console.error(`prepack: ${message}\nprepack: run \`pnpm build\` from the repo root first.`);
     process.exit(1);
   }
 }

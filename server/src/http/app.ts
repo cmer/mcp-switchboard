@@ -167,7 +167,7 @@ export function createApp(ctx: AppContext, webDist: string, opts: { serveMcp?: b
     if (!fs.existsSync(filePath) || !fs.statSync(filePath).isFile()) {
       filePath = path.join(webDist, "index.html"); // SPA fallback
       if (!fs.existsSync(filePath)) {
-        return c.text("Web UI not built. Run: npm run build (or use npm run dev for the Vite dev server).", 404);
+        return c.text("Web UI not built. Run: pnpm build (or use pnpm dev for the Vite dev server).", 404);
       }
     }
     const ext = path.extname(filePath);
