@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.4.0] — 2026-11-26
+
 ### Changed
 
 - **The Firecrawl template connects to Firecrawl's hosted MCP endpoint with OAuth.** It used to run
@@ -493,7 +495,8 @@ Initial release.
 - **Built-in `switchboard__list_servers` meta-tool.**
 - Docker image and GitHub Actions CI (build + test, plus a Docker build and smoke test).
 
-[Unreleased]: https://github.com/cmer/mcp-switchboard/compare/v2.3.0...HEAD
+[Unreleased]: https://github.com/cmer/mcp-switchboard/compare/v2.4.0...HEAD
+[2.4.0]: https://github.com/cmer/mcp-switchboard/compare/v2.3.0...v2.4.0
 [2.3.0]: https://github.com/cmer/mcp-switchboard/compare/v2.2.1...v2.3.0
 [2.2.1]: https://github.com/cmer/mcp-switchboard/compare/v2.2.0...v2.2.1
 [2.2.0]: https://github.com/cmer/mcp-switchboard/compare/v2.1.0...v2.2.0
