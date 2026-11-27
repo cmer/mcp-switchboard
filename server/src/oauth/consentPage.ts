@@ -55,6 +55,9 @@ button.primary { background: var(--primary); border-color: var(--primary); color
 export function renderConsentPage(view: ConsentView): string {
   const client = view.clientName ? `A client calling itself <b>${esc(view.clientName)}</b>` : "An unnamed client";
   const target = view.agentSlug ? ` as agent <code>${esc(view.agentSlug)}</code>` : "";
+  const pairingLocation = view.agentSlug
+    ? `generate a pairing code for <code>${esc(view.agentSlug)}</code> on the switchboard's <b>Agents</b> page (under <b>OAuth</b>)`
+    : `generate a pairing code for the agent you want to connect on the switchboard's <b>Agents</b> page (under <b>OAuth</b>)`;
   const loopbackNote = view.redirectIsLoopback
     ? `<p class="warn">This sends access to a program running on the computer you are using right now.</p>`
     : "";
@@ -69,7 +72,7 @@ export function renderConsentPage(view: ConsentView): string {
 <p>${client} wants to connect${target}.</p>
 <div class="dest"><span>Access will be sent to</span><code>${esc(view.redirectHost)}</code></div>
 ${loopbackNote}
-<p>Only continue if you started this connection yourself. To approve, enter a pairing code from the switchboard: <b>Agents → Connection instructions → Claude</b>.</p>
+<p>Only continue if you started this connection yourself. To approve, ${pairingLocation}.</p>
 <form method="post" autocomplete="off">${hidden}
 <label for="pairing_code">Pairing code</label>
 <input id="pairing_code" name="pairing_code" type="text" placeholder="XXXX-XXXX" autofocus autocapitalize="characters" spellcheck="false">

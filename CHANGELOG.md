@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **OAuth pairing codes are now client-agnostic.** Each agent card now has an always-visible
+  **OAuth** section to generate pairing codes and manage approved clients directly, the Connect
+  dialog adds a generic **OAuth** tab, and the OAuth approval page points to the agent's **OAuth**
+  section on the **Agents** page instead of telling non-Claude clients (such as Google Antigravity)
+  to look under Claude.
+
 ## [2.5.0] — 2026-11-27
 
 ### Added

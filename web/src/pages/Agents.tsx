@@ -24,7 +24,7 @@ function useEndpointUrl(): (slug: string) => string {
 /* ---------- connect dialog ---------- */
 
 /** One-time code for the OAuth consent page — the long-lived agent token never leaves this UI. */
-function PairingCode({ agent }: { agent: AgentInfo }) {
+function PairingCode({ agent, embedded }: { agent: AgentInfo; embedded?: boolean }) {
   const [pairing, setPairing] = useState<{ code: string; expiresAt: number } | null>(null);
   const generate = useApiMutation(
     () => api<{ code: string; expiresAt: number }>(`/api/agents/${agent.id}/oauth-pairing-code`, { method: "POST" }),
@@ -34,7 +34,12 @@ function PairingCode({ agent }: { agent: AgentInfo }) {
   const expiresAt = pairing ? new Date(pairing.expiresAt).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" }) : null;
 
   return (
-    <div className="mt-3 flex items-center gap-3 rounded-[10px] border border-border-soft bg-panel-2/40 px-3 py-2.5">
+    <div
+      className={cn(
+        "flex items-center gap-3 bg-panel-2/40 px-3 py-2.5",
+        !embedded && "mt-3 rounded-[10px] border border-border-soft",
+      )}
+    >
       {pairing ? (
         <>
           <code className="font-mono text-base font-semibold tracking-[0.12em]">{pairing.code}</code>
@@ -51,7 +56,7 @@ function PairingCode({ agent }: { agent: AgentInfo }) {
   );
 }
 
-type ClientTab = "claude" | "codex" | "antigravity" | "ohmypi" | "json";
+type ClientTab = "claude" | "codex" | "antigravity" | "ohmypi" | "oauth" | "json";
 
 /** One copyable config block. A tab holds one or more, e.g. Claude Code and Claude Desktop under "Claude". */
 interface Snippet {
@@ -141,12 +146,32 @@ function ConnectDialog({ agent, open, onClose }: { agent: AgentInfo; open: boole
       {
         caption: "Or by hand: ~/.gemini/config/mcp_config.json",
         text: `{\n  "mcpServers": {\n    "switchboard": {\n      "serverUrl": "${url}",\n      "headers": { "Authorization": "${auth}" }\n    }\n  }\n}`,
+        note: (
+          <>
+            Connecting over OAuth instead? Use the <b>OAuth</b> tab (or this agent's <b>OAuth</b> section) to generate a
+            pairing code.
+          </>
+        ),
       },
     ],
     ohmypi: [
       {
         caption: "Slash command",
         text: `/mcp add switchboard --scope user \\\n  --url ${url} --transport http \\\n  --token ${agent.token}`,
+      },
+    ],
+    oauth: [
+      {
+        caption: "Endpoint URL",
+        text: url,
+        note: (
+          <>
+            For any MCP client that signs in with OAuth (Claude Desktop, claude.ai, Google Antigravity, Cursor, MCP
+            Inspector, …). Paste this URL and leave the OAuth client ID and secret empty — the switchboard handles
+            dynamic client registration. When the approval page opens, enter a pairing code from below.
+          </>
+        ),
+        extra: <PairingCode agent={agent} />,
       },
     ],
     json: [
@@ -167,6 +192,7 @@ function ConnectDialog({ agent, open, onClose }: { agent: AgentInfo; open: boole
           { value: "codex", label: "Codex" },
           { value: "antigravity", label: "Antigravity" },
           { value: "ohmypi", label: "Oh My Pi" },
+          { value: "oauth", label: "OAuth" },
           { value: "json", label: "Raw JSON" },
         ]}
       />
@@ -215,17 +241,22 @@ function OAuthGrantRow({ agent, grant }: { agent: AgentInfo; grant: OAuthGrant }
   );
 }
 
-function OAuthGrants({ agent }: { agent: AgentInfo }) {
+function OAuthSection({ agent }: { agent: AgentInfo }) {
   return (
     <div className="mb-4">
       <div className="mb-2 flex items-baseline justify-between">
-        <span className="text-xs font-semibold">OAuth connections</span>
-        <span className="text-[11px] text-faint">clients approved with a pairing code</span>
+        <span className="text-xs font-semibold">OAuth</span>
+        <span className="text-[11px] text-faint">approve clients with a one-time pairing code</span>
       </div>
       <div className="overflow-hidden rounded-[10px] border border-border-soft">
-        {agent.oauthGrants.map((grant) => (
-          <OAuthGrantRow key={grant.id} agent={agent} grant={grant} />
-        ))}
+        <PairingCode agent={agent} embedded />
+        {agent.oauthGrants.length > 0 && (
+          <div className="border-t border-border-soft">
+            {agent.oauthGrants.map((grant) => (
+              <OAuthGrantRow key={grant.id} agent={agent} grant={grant} />
+            ))}
+          </div>
+        )}
       </div>
     </div>
   );
@@ -394,7 +425,7 @@ function AgentCard({ agent, servers, shares }: { agent: AgentInfo; servers: Serv
             </div>
           </div>
 
-          {agent.oauthGrants.length > 0 && <OAuthGrants agent={agent} />}
+          <OAuthSection agent={agent} />
 
           <div className="mb-2 flex items-baseline justify-between">
             <span className="text-xs font-semibold">Servers for this agent</span>
