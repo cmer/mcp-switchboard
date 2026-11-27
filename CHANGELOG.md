@@ -21,6 +21,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **The Connect dialog groups clients by vendor.** Claude Code and Claude Desktop / claude.ai now
   share one Claude tab, and the Codex tab says that its `config.toml` also covers the ChatGPT
   desktop app. Fewer tabs, and it's clearer which snippet a given app needs.
+- **New agents start with Lean tool exposure.** Lean keeps an agent's `tools/list` to a few
+  search/describe/call tools instead of every upstream schema, which saves a lot of context once a
+  few servers are enabled, so it is the better starting point. Existing agents keep their current
+  mode, and you can still switch any agent to Full on the Agents page.
 
 ## [2.4.0] — 2026-11-26
 
