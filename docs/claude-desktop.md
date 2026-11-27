@@ -12,13 +12,13 @@ to register anywhere.
    `https://<public-host>/mcp/<username>/<agent>` (the bare host 404s), then keep **Sign in now** and
    **Register automatically** (dynamic client registration). "Claude's published identity" (CIMD) is
    not supported.
-3. Claude opens an approval page served by the switchboard. On the Agents page, open the agent's
-   **Connection instructions, Claude** tab, click **Generate pairing code**, type the code into the
-   approval page and click **Approve**.
+3. Claude opens an approval page served by the switchboard. On the **Agents** page, expand the agent
+   and click **Generate pairing code** under **OAuth** (also available under **Connection
+   instructions → OAuth**), type the code into the approval page and click **Approve**.
 
 Pairing codes are single-use and expire after 10 minutes, so the agent's long-lived token never has to
 be pasted into a web page. Each user can only generate codes for their own agents. The approved client
-shows up under the agent's **OAuth connections**, where it can be revoked. Access tokens last an hour
+shows up under the agent's **OAuth** section, where it can be revoked. Access tokens last an hour
 and are refreshed automatically; an unused connection lapses after 90 days. Static bearer tokens keep
 working alongside OAuth.
 
