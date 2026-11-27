@@ -633,7 +633,7 @@ class Scope implements UserScope {
       if (bad) return bad;
       const row = this.db
         .insert(agents)
-        .values({ userId: this.uid, slug, name: input.name, tokenEnc: encrypt(randomToken()), createdAt: Date.now() })
+        .values({ userId: this.uid, slug, name: input.name, toolMode: "lean", tokenEnc: encrypt(randomToken()), createdAt: Date.now() })
         .returning()
         .get();
       return { row };
