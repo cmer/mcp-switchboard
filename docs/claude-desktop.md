@@ -13,7 +13,7 @@ to register anywhere.
    **Register automatically** (dynamic client registration). "Claude's published identity" (CIMD) is
    not supported.
 3. Claude opens an approval page served by the switchboard. On the Agents page, open the agent's
-   **Connection instructions, Claude Desktop**, click **Generate pairing code**, type the code into the
+   **Connection instructions, Claude** tab, click **Generate pairing code**, type the code into the
    approval page and click **Approve**.
 
 Pairing codes are single-use and expire after 10 minutes, so the agent's long-lived token never has to

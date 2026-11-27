@@ -51,41 +51,111 @@ function PairingCode({ agent }: { agent: AgentInfo }) {
   );
 }
 
-function ConnectDialog({ agent, open, onClose }: { agent: AgentInfo; open: boolean; onClose: () => void }) {
-  const [tab, setTab] = useState<"claude" | "desktop" | "codex" | "ohmypi" | "json">("claude");
-  const url = useEndpointUrl()(agent.slug);
+type ClientTab = "claude" | "codex" | "antigravity" | "ohmypi" | "json";
 
-  const snippets: Record<typeof tab, { caption: string; text: string; note?: ReactNode; extra?: ReactNode }> = {
-    claude: {
-      caption: "One-liner",
-      text: `claude mcp add switchboard --transport http \\\n  ${url} \\\n  --header "Authorization: Bearer ${agent.token}"`,
-    },
-    desktop: {
-      caption: "Connector URL",
-      text: url,
-      note: (
-        <>
-          In Claude Desktop or claude.ai: <b>Settings → Connectors → Add custom connector</b>, paste this URL and leave
-          the OAuth client ID and secret empty. When the switchboard's approval page opens, enter a pairing code from
-          below. Claude connects from Anthropic's cloud, so this URL must be your public HTTPS address.
-        </>
-      ),
-      extra: <PairingCode agent={agent} />,
-    },
-    codex: {
-      caption: "config.toml",
-      text: `[mcp_servers.switchboard]\nurl = "${url}"\nhttp_headers = { "Authorization" = "Bearer ${agent.token}" }`,
-    },
-    ohmypi: {
-      caption: "Slash command",
-      text: `/mcp add switchboard --scope user \\\n  --url ${url} --transport http \\\n  --token ${agent.token}`,
-    },
-    json: {
-      caption: ".mcp.json",
-      text: `{\n  "mcpServers": {\n    "switchboard": {\n      "type": "http",\n      "url": "${url}",\n      "headers": { "Authorization": "Bearer ${agent.token}" }\n    }\n  }\n}`,
-    },
+/** One copyable config block. A tab holds one or more, e.g. Claude Code and Claude Desktop under "Claude". */
+interface Snippet {
+  title?: string;
+  caption: string;
+  text: string;
+  note?: ReactNode;
+  extra?: ReactNode;
+}
+
+function SnippetBlock({ snippet }: { snippet: Snippet }) {
+  return (
+    <section>
+      {snippet.title && <h3 className="mb-2 text-sm font-semibold">{snippet.title}</h3>}
+      <div className="mb-1.5 flex items-center justify-between">
+        <span className="text-xs font-semibold text-muted-fg">{snippet.caption}</span>
+        <CopyButton text={snippet.text} />
+      </div>
+      <pre className="overflow-x-auto rounded-[10px] border border-border-soft bg-code-bg px-3.5 py-3 font-mono text-xs leading-relaxed">
+        {snippet.text}
+      </pre>
+      {snippet.note && <p className="mt-3 text-xs leading-relaxed text-muted-fg">{snippet.note}</p>}
+      {snippet.extra}
+    </section>
+  );
+}
+
+function ConnectDialog({ agent, open, onClose }: { agent: AgentInfo; open: boolean; onClose: () => void }) {
+  const [tab, setTab] = useState<ClientTab>("claude");
+  const url = useEndpointUrl()(agent.slug);
+  const auth = `Bearer ${agent.token}`;
+
+  const snippets: Record<ClientTab, Snippet[]> = {
+    claude: [
+      {
+        title: "Claude Code",
+        caption: "One-liner",
+        text: `claude mcp add switchboard --transport http \\\n  ${url} \\\n  --header "Authorization: ${auth}"`,
+      },
+      {
+        title: "Claude Desktop & claude.ai",
+        caption: "Connector URL",
+        text: url,
+        note: (
+          <>
+            <b>Settings → Connectors → Add custom connector</b>, paste this URL and leave the OAuth client ID and
+            secret empty. When the switchboard's approval page opens, enter a pairing code from below. Claude connects
+            from Anthropic's cloud, so this URL must be your public HTTPS address.
+          </>
+        ),
+        extra: <PairingCode agent={agent} />,
+      },
+    ],
+    codex: [
+      {
+        caption: "One-liner",
+        // `codex mcp add` can't set a static header, so write the table directly. Removing first makes it
+        // safe to re-run after a token rotation. Kept POSIX- and fish-compatible.
+        text:
+          `codex mcp remove switchboard >/dev/null 2>&1; mkdir -p ~/.codex && \\\n` +
+          `  printf '\\n[mcp_servers.switchboard]\\nurl = "%s"\\nhttp_headers = { "Authorization" = "%s" }\\n' \\\n` +
+          `  "${url}" "${auth}" >> ~/.codex/config.toml`,
+        note: (
+          <>
+            Adds the switchboard to <code className="font-mono">~/.codex/config.toml</code>, which the Codex CLI, the
+            ChatGPT desktop app and the IDE extension all read. Running it again replaces the entry.
+          </>
+        ),
+      },
+      {
+        caption: "Or by hand: ~/.codex/config.toml",
+        text: `[mcp_servers.switchboard]\nurl = "${url}"\nhttp_headers = { "Authorization" = "${auth}" }`,
+      },
+    ],
+    antigravity: [
+      {
+        caption: "One-liner",
+        text: `agy mcp add --header "Authorization: ${auth}" \\\n  switchboard ${url}`,
+        note: (
+          <>
+            Writes <code className="font-mono">~/.gemini/config/mcp_config.json</code>, which the{" "}
+            <code className="font-mono">agy</code> CLI, the Antigravity app and the IDE all read. Running it again updates
+            the entry.
+          </>
+        ),
+      },
+      {
+        caption: "Or by hand: ~/.gemini/config/mcp_config.json",
+        text: `{\n  "mcpServers": {\n    "switchboard": {\n      "serverUrl": "${url}",\n      "headers": { "Authorization": "${auth}" }\n    }\n  }\n}`,
+      },
+    ],
+    ohmypi: [
+      {
+        caption: "Slash command",
+        text: `/mcp add switchboard --scope user \\\n  --url ${url} --transport http \\\n  --token ${agent.token}`,
+      },
+    ],
+    json: [
+      {
+        caption: ".mcp.json",
+        text: `{\n  "mcpServers": {\n    "switchboard": {\n      "type": "http",\n      "url": "${url}",\n      "headers": { "Authorization": "${auth}" }\n    }\n  }\n}`,
+      },
+    ],
   };
-  const current = snippets[tab];
 
   return (
     <Dialog open={open} onClose={onClose} title={`Connect ${agent.name}`} description="Each form registers the switchboard as a single MCP server." wide>
@@ -93,28 +163,22 @@ function ConnectDialog({ agent, open, onClose }: { agent: AgentInfo; open: boole
         value={tab}
         onChange={setTab}
         options={[
-          { value: "claude", label: "Claude Code" },
-          { value: "desktop", label: "Claude Desktop" },
+          { value: "claude", label: "Claude" },
           { value: "codex", label: "Codex" },
+          { value: "antigravity", label: "Antigravity" },
           { value: "ohmypi", label: "Oh My Pi" },
           { value: "json", label: "Raw JSON" },
         ]}
       />
-      <div className="mt-4">
-        <div className="mb-1.5 flex items-center justify-between">
-          <span className="text-xs font-semibold text-muted-fg">{current.caption}</span>
-          <CopyButton text={current.text} />
-        </div>
-        <pre className="overflow-x-auto rounded-[10px] border border-border-soft bg-code-bg px-3.5 py-3 font-mono text-xs leading-relaxed">
-          {current.text}
-        </pre>
-        {current.note && <p className="mt-3 text-xs leading-relaxed text-muted-fg">{current.note}</p>}
-        {current.extra}
-        <p className="mt-3 text-xs text-faint">
-          Tools arrive namespaced: <code className="font-mono">github__create_issue</code>,{" "}
-          <code className="font-mono">postgres__query</code>, …
-        </p>
+      <div className="mt-4 space-y-6">
+        {snippets[tab].map((snippet) => (
+          <SnippetBlock key={snippet.caption} snippet={snippet} />
+        ))}
       </div>
+      <p className="mt-4 text-xs text-faint">
+        Tools arrive namespaced: <code className="font-mono">github__create_issue</code>,{" "}
+        <code className="font-mono">postgres__query</code>, …
+      </p>
     </Dialog>
   );
 }
