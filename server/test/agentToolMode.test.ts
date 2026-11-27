@@ -47,14 +47,14 @@ afterEach(() => {
 });
 
 describe("agent toolMode", () => {
-  it("defaults to full for new agents", async () => {
+  it("defaults to lean for new agents", async () => {
     const created = await apiCall("POST", "/", { name: "Codex" });
     expect(created.status).toBe(201);
-    expect(created.body.toolMode).toBe("full");
+    expect(created.body.toolMode).toBe("lean");
 
     const { status, body } = await apiCall("GET", "/");
     expect(status).toBe(200);
-    expect(body.map((a: any) => a.toolMode)).toEqual(["full", "full"]);
+    expect(body.map((a: any) => a.toolMode)).toEqual(["full", "lean"]);
   });
 
   it("round-trips to lean and back, notifying live sessions on each change", async () => {

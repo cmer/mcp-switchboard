@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **New agents start with Lean tool exposure.** Lean keeps an agent's `tools/list` to a few
+  search/describe/call tools instead of every upstream schema, which saves a lot of context once a
+  few servers are enabled, so it is the better starting point. Existing agents keep their current
+  mode, and you can still switch any agent to Full on the Agents page.
+
 ## [2.4.0] — 2026-11-26
 
 ### Changed

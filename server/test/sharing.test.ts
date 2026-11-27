@@ -105,6 +105,8 @@ async function newServer(who: Person, slug: string, extra: Record<string, unknow
 async function newAgent(who: Person, name = "Claude") {
   const res = await call("POST", "/api/agents", who, { name });
   expect(res.status).toBe(201);
+  // New agents start lean; these tests read upstream tools straight off tools/list.
+  expect((await call("PATCH", `/api/agents/${res.body.id}`, who, { toolMode: "full" })).status).toBe(200);
   return { id: res.body.id as number, slug: res.body.slug as string, token: res.body.token as string };
 }
 
