@@ -69,7 +69,7 @@ export function renderConsentPage(view: ConsentView): string {
 <p>${client} wants to connect${target}.</p>
 <div class="dest"><span>Access will be sent to</span><code>${esc(view.redirectHost)}</code></div>
 ${loopbackNote}
-<p>Only continue if you started this connection yourself. To approve, enter a pairing code from the switchboard: <b>Agents → Connection instructions → Claude Desktop</b>.</p>
+<p>Only continue if you started this connection yourself. To approve, enter a pairing code from the switchboard: <b>Agents → Connection instructions → Claude</b>.</p>
 <form method="post" autocomplete="off">${hidden}
 <label for="pairing_code">Pairing code</label>
 <input id="pairing_code" name="pairing_code" type="text" placeholder="XXXX-XXXX" autofocus autocapitalize="characters" spellcheck="false">

@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Connection instructions for Google Antigravity.** A new Antigravity tab gives an
+  `agy mcp add` one-liner. It writes `~/.gemini/config/mcp_config.json`, which the `agy` CLI, the
+  Antigravity app and the IDE all read, so one paste connects all three.
+- **A one-liner for Codex.** `codex mcp add` can't set a static header, so the Codex tab now gives a
+  paste-in command that writes the entry to `~/.codex/config.toml` for you. Running it again after
+  rotating the token replaces the old entry. The hand-edit snippet is still there.
+
+### Changed
+
+- **The Connect dialog groups clients by vendor.** Claude Code and Claude Desktop / claude.ai now
+  share one Claude tab, and the Codex tab says that its `config.toml` also covers the ChatGPT
+  desktop app. Fewer tabs, and it's clearer which snippet a given app needs.
+
 ## [2.4.0] — 2026-11-26
 
 ### Changed
